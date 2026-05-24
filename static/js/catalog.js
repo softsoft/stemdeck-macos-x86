@@ -1469,6 +1469,46 @@ function wireAboutDialog() {
   });
 }
 
+async function loadRuntimeSettings() {
+  const versionEl = document.getElementById("settingsVersion");
+  const modelEl = document.getElementById("settingsModel");
+  const deviceEl = document.getElementById("settingsDevice");
+  const ffmpegEl = document.getElementById("settingsFfmpeg");
+  try {
+    const res = await fetch("/api/health", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (versionEl) versionEl.textContent = `v${normalizeVersion(data.version)}`;
+    if (modelEl) modelEl.textContent = data.demucs_model || "—";
+    if (deviceEl) deviceEl.textContent = data.demucs_device || "—";
+    if (ffmpegEl) ffmpegEl.textContent = data.ffmpeg_configured ? "configured" : "not configured";
+  } catch (e) {
+    console.warn("[catalog] settings fetch failed:", e);
+  }
+}
+
+function wireSettingsDialog() {
+  const btn = document.getElementById("settingsBtn");
+  const dialog = document.getElementById("settingsDialog");
+  const close = document.getElementById("settingsClose");
+  if (!btn || !dialog) return;
+
+  const open = async () => {
+    dialog.classList.remove("hidden");
+    await loadRuntimeSettings();
+  };
+  const hide = () => dialog.classList.add("hidden");
+
+  btn.addEventListener("click", open);
+  close?.addEventListener("click", hide);
+  dialog.addEventListener("mousedown", (e) => {
+    if (e.target === dialog) hide();
+  });
+  dialog.addEventListener("keydown", (e) => {
+    if (e.code === "Escape") hide();
+  });
+}
+
 async function syncWithServer() {
   try {
     const res = await fetch("/api/jobs", { cache: "no-store" });
@@ -1498,6 +1538,7 @@ export async function initCatalog() {
   wireRailLibraryDrop();
   wireLibraryDeleteKeys();
   wireAboutDialog();
+  wireSettingsDialog();
   setDisplayedVersion(currentVersion);
   render();
 

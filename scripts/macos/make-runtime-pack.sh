@@ -2,15 +2,25 @@
 set -euo pipefail
 
 ARCH="${ARCH:-arm64}"
-VERSION="${VERSION:-LOCAL_DEV_TEST}"
-VERSION="${VERSION#v}"
-RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://github.com/thcp/stemdeck/releases/download/v${VERSION}}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/.build"
 STAGING="${BUILD_DIR}/runtime-staging-${ARCH}"
 RUNTIME_DIR="${STAGING}/runtime"
 PYTHON_DIR="${RUNTIME_DIR}/python"
 BACKEND_DIR="${RUNTIME_DIR}/backend"
+
+if [[ -z "${VERSION:-}" ]]; then
+  VERSION="$(
+    python3 - "$REPO_ROOT/pyproject.toml" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+m = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
+print(m.group(1) if m else "0.6.0-alpha.2")
+PY
+  )"
+fi
+VERSION="${VERSION#v}"
+RELEASE_BASE_URL="${RELEASE_BASE_URL:-https://github.com/stemdeckapp/stemdeck/releases/download/v${VERSION}}"
 
 if [[ "$(uname)" != "Darwin" ]]; then
   echo "ERROR: make-runtime-pack.sh must run on macOS" >&2
@@ -38,6 +48,44 @@ for cmd in ditto shasum tar "$PYTHON_BIN"; do
     exit 1
   fi
 done
+
+# Homebrew Python is marked as externally managed (PEP 668) and is not suitable
+# as the source for our bundled runtime. Auto-switch to a uv-managed standalone
+# Python unless the caller already provided a non-Homebrew interpreter.
+if "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
+import pathlib, sys
+ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+marker = pathlib.Path(sys.base_prefix) / "lib" / ver / "EXTERNALLY-MANAGED"
+raise SystemExit(0 if marker.is_file() else 1)
+PY
+then
+  echo "==> Detected externally-managed Python at $PYTHON_BIN; switching to uv-managed Python"
+  uv python install 3.12
+  UV_LIST_JSON="$(mktemp)"
+  uv python list --only-installed --managed-python --output-format json > "$UV_LIST_JSON"
+  UV_MANAGED_BIN="$("$PYTHON_BIN" - "$UV_LIST_JSON" <<'PY'
+import json, pathlib, sys
+json_path = pathlib.Path(sys.argv[1])
+items = json.loads(json_path.read_text(encoding="utf-8"))
+pick = None
+for item in items:
+    if item.get("implementation") == "cpython" and item.get("arch") == "x86_64":
+        ver = item.get("version", "")
+        if ver.startswith("3.12"):
+            pick = item.get("path")
+            break
+if not pick and items:
+    pick = items[0].get("path")
+print(pick or "")
+PY
+)"
+  rm -f "$UV_LIST_JSON"
+  if [[ -z "$UV_MANAGED_BIN" || ! -x "$UV_MANAGED_BIN" ]]; then
+    echo "ERROR: failed to resolve uv-managed Python 3.12 executable" >&2
+    exit 1
+  fi
+  PYTHON_BIN="$UV_MANAGED_BIN"
+fi
 
 PYTHON_VERSION="$("$PYTHON_BIN" - <<'PY'
 import sys
@@ -120,13 +168,34 @@ ditto "$PYTHON_BASE_PREFIX" "$PYTHON_DIR"
 # packages into it. Remove it so we can treat this copy as our own install.
 find "$PYTHON_DIR/lib" -name "EXTERNALLY-MANAGED" -delete
 
+# Resolve executable name inside the copied runtime. Homebrew/PBS layouts vary:
+# some ship bin/python, others only python3 / python3.x.
+PYTHON_RUNTIME_BIN=""
+for candidate in "$PYTHON_DIR/bin/python" "$PYTHON_DIR/bin/python3" "$PYTHON_DIR/bin/python${PYTHON_VERSION}"; do
+  if [[ -x "$candidate" ]]; then
+    PYTHON_RUNTIME_BIN="$candidate"
+    break
+  fi
+done
+if [[ -z "$PYTHON_RUNTIME_BIN" ]]; then
+  echo "ERROR: no runnable python executable found under $PYTHON_DIR/bin" >&2
+  exit 1
+fi
+
 echo "==> Installing packages into bundled Python"
-# --system is required because $PYTHON_DIR is not a venv (it's a full Python install).
-uv pip install --system --python "$PYTHON_DIR/bin/python" pip setuptools wheel
-uv pip install --system --python "$PYTHON_DIR/bin/python" "$REPO_ROOT"
+# Prefer uv (fast), but fall back to stdlib ensurepip/pip when uv refuses to
+# treat the copied runtime as a "system" installation.
+if uv pip install --system --python "$PYTHON_RUNTIME_BIN" pip setuptools wheel; then
+  uv pip install --system --python "$PYTHON_RUNTIME_BIN" "$REPO_ROOT"
+else
+  echo "==> uv install path failed; falling back to bundled pip"
+  PYTHONHOME="$PYTHON_DIR" "$PYTHON_RUNTIME_BIN" -m ensurepip --upgrade
+  PYTHONHOME="$PYTHON_DIR" "$PYTHON_RUNTIME_BIN" -m pip install --upgrade pip setuptools wheel
+  PYTHONHOME="$PYTHON_DIR" "$PYTHON_RUNTIME_BIN" -m pip install "$REPO_ROOT"
+fi
 
 echo "==> Verifying stdlib and imports"
-PYTHON_DIR="$PYTHON_DIR" PYTHONHOME="$PYTHON_DIR" "$PYTHON_DIR/bin/python" - <<'PY'
+PYTHON_DIR="$PYTHON_DIR" PYTHONHOME="$PYTHON_DIR" "$PYTHON_RUNTIME_BIN" - <<'PY'
 import importlib, os, pathlib, sys
 
 ver = f"python{sys.version_info.major}.{sys.version_info.minor}"
@@ -160,7 +229,9 @@ JSON
 
 echo "==> Capturing dependency inventory"
 mkdir -p "$RUNTIME_DIR/licenses"
-uv pip list --system --python "$PYTHON_DIR/bin/python" --format=json > "$RUNTIME_DIR/licenses/pip-list.json"
+if ! uv pip list --system --python "$PYTHON_RUNTIME_BIN" --format=json > "$RUNTIME_DIR/licenses/pip-list.json"; then
+  PYTHONHOME="$PYTHON_DIR" "$PYTHON_RUNTIME_BIN" -m pip list --format=json > "$RUNTIME_DIR/licenses/pip-list.json"
+fi
 
 cat > "$RUNTIME_DIR/runtime-manifest.json" <<JSON
 {

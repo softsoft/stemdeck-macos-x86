@@ -2,26 +2,19 @@
 
 <img src="imgs/stemdeck-svg-assets/stemdeck-logo-stacked.svg" alt="StemDeck" width="515" />
 
-**SoftSoft MOD**
-
 **Free, local stem separation. No account. No upload. No subscription.**
 
 <div align="center">
   <a href="https://ci.popchores.app/repos/2"><img src="https://ci.popchores.app/api/badges/2/status.svg?event=push" alt="CI"></a>
-  <a href="https://github.com/softsoft/stemdeck-macos-x86/stargazers"><img src="https://img.shields.io/github/stars/stemdeckapp/stemdeck?style=flat-square" alt="GitHub Stars"></a>
-  <a href="https://github.com/softsoft/stemdeck-macos-x86/releases"><img src="https://img.shields.io/github/downloads/stemdeckapp/stemdeck/total?style=flat-square&color=52c65f" alt="Total Downloads"></a>
-  <a href="https://github.com/ssoftsoft/stemdeck-macos-x86/releases/latest"><img src="https://img.shields.io/github/v/release/stemdeckapp/stemdeck?style=flat-square" alt="Latest Release"></a>
-  <a href="https://github.com/softsoft/stemdeck-macos-x86/blob/main/LICENSE"><img src="https://img.shields.io/github/license/stemdeckapp/stemdeck?style=flat-square" alt="License"></a>
+  <a href="https://github.com/stemdeckapp/stemdeck/stargazers"><img src="https://img.shields.io/github/stars/stemdeckapp/stemdeck?style=flat-square" alt="GitHub Stars"></a>
+  <a href="https://github.com/stemdeckapp/stemdeck/releases"><img src="https://img.shields.io/github/downloads/stemdeckapp/stemdeck/total?style=flat-square&color=52c65f" alt="Total Downloads"></a>
+  <a href="https://github.com/stemdeckapp/stemdeck/releases/latest"><img src="https://img.shields.io/github/v/release/stemdeckapp/stemdeck?style=flat-square" alt="Latest Release"></a>
+  <a href="https://github.com/stemdeckapp/stemdeck/blob/main/LICENSE"><img src="https://img.shields.io/github/license/stemdeckapp/stemdeck?style=flat-square" alt="License"></a>
 </div>
 
 <br>
 
 <p align="center"><sub>JOIN THE COMMUNITY</sub></p>
-<div align="center">
-  <a href="https://github.com/softsoft/stemdeck-macos-x86"><img src="https://img.shields.io/badge/GitHub-stemdeckapp-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub"></a>
-</div>
-
-<p align="center"><sub>JOIN THE ORIGINAL COMMUNITY</sub></p>
 <div align="center">
   <a href="https://github.com/stemdeckapp/stemdeck"><img src="https://img.shields.io/badge/GitHub-stemdeckapp-181717?style=flat-square&logo=github&logoColor=white" alt="GitHub"></a>
   <a href="https://discord.gg/JGk7FdZb9N"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=flat-square&logo=discord&logoColor=white" alt="Discord"></a>
@@ -43,41 +36,6 @@ Drop an MP3 or WAV, or paste a YouTube URL. StemDeck splits the audio into up to
 ![StemDeck screenshot](imgs/screenshot/stemdeck.png)
 
 If you find StemDeck useful, consider [buying the maker a coffee](https://www.buymeacoffee.com/stemdeckapp); these donations are being used to random acts of kindness toward others 
-
----
-
-## This Adaptation (macOS x86)
-
-This branch is an adaptation of StemDeck with a specific focus on Intel macOS (x86_64), including practical support for GPU acceleration through Metal/MPS where available.
-
-It is not intended to replace upstream direction. It is a focused compatibility/performance track for Intel Mac users, with conservative changes around runtime packaging, startup setup, and device selection.
-
-SoftSoft Mod version: 0.1.0 - alpha  
-SoftSoft Mod repo: https://github.com/softsoft/stemdeck-macos-x86  
-Автор: Andris Jegorov aka SoftSoft  
-Original repository: https://github.com/stemdeckapp/stemdeck
-
-## My Development Direction
-
-- Keep upstream architecture and UX intact.
-- Prioritize reliability of local desktop builds on Intel macOS.
-- Prefer explicit runtime diagnostics over silent fallbacks.
-- Keep changes reversible and minimal, so rebases from upstream stay manageable.
-
-## What Has Already Been Added
-
-1. macOS device selection no longer treats Intel builds as hard CPU-only; MPS probe is allowed and used when available.
-2. Desktop setup messages were updated from Apple-Silicon-only wording to generic macOS Metal (MPS) wording.
-3. macOS runtime build scripts were hardened for real-world Python layouts:
-   - robust `python` executable resolution (`python` / `python3` / `python3.x`);
-   - fallback from `uv pip` to bundled `pip` flow;
-   - auto-switch away from externally-managed Homebrew Python to uv-managed Python.
-4. Runtime URL/version defaults now resolve to `stemdeckapp/stemdeck` release format and semver-safe app stamping.
-5. Build script behavior improved:
-   - fail-fast on errors;
-   - no next stages after failure;
-   - step-by-step progress output.
-6. Settings entry in UI is now functional (modal opens, shows runtime/app info from `/api/health`).
 
 ---
 
@@ -142,7 +100,7 @@ Pre-built installers and zips are attached to each [GitHub Release](https://gith
 | DMG | GPU | Chip |
 |---|---|---|
 | `StemDeck-macOS-arm64.dmg` | Apple Silicon (MPS) | M1 and later |
-| `StemDeck-macOS-x64.dmg` | Metal (MPS) when available, CPU fallback | Intel |
+| `StemDeck-macOS-x64.dmg` | CPU only | Intel |
 
 Open the DMG, drag StemDeck to Applications, and launch it. On first launch the setup screen downloads the Python runtime (~500 MB), FFmpeg, and the Demucs model (~170 MB). Subsequent launches skip setup and start in seconds. No Python or system dependencies required.
 
@@ -361,14 +319,13 @@ The author(s) of StemDeck provide this software "as is", without warranty of any
 
 ## Community
 
-| Platform        | Link |
-|-----------------|---|
-| GitHub MOD      | [softsoft/stemdeck-macos-x86](https://github.com/softsoft/stemdeck-macos-x86) |
-| GitHub Original | [stemdeckapp/stemdeck](https://github.com/stemdeckapp/stemdeck) |
-| Discord         | [discord.gg/JGk7FdZb9N](https://discord.gg/JGk7FdZb9N) |
-| Reddit          | [r/StemDeckApp](https://www.reddit.com/r/StemDeckApp/) |
-| Instagram       | [@stemdeck](https://www.instagram.com/stemdeck) |
-| Website         | [stemdeck.app](https://stemdeck.app) *(coming soon)* |
+| Platform | Link |
+|---|---|
+| GitHub | [stemdeckapp/stemdeck](https://github.com/stemdeckapp/stemdeck) |
+| Discord | [discord.gg/JGk7FdZb9N](https://discord.gg/JGk7FdZb9N) |
+| Reddit | [r/StemDeckApp](https://www.reddit.com/r/StemDeckApp/) |
+| Instagram | [@stemdeck](https://www.instagram.com/stemdeck) |
+| Website | [stemdeck.app](https://stemdeck.app) *(coming soon)* |
 
 ---
 

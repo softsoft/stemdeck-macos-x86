@@ -1805,6 +1805,14 @@ input, textarea { font-family: inherit; }
   text-decoration: none; font-family: var(--font-mono);
 }
 .about-link:hover { text-decoration: underline; }
+.settings-card { width: min(500px, calc(100vw - 32px)); text-align: left; }
+.settings-grid { display: grid; gap: 10px; margin-top: 8px; }
+.settings-row {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+}
+.settings-label { color: var(--muted); font-size: 12px; }
+.settings-value { color: var(--fg); font-family: var(--font-mono); font-size: 12px; text-align: right; }
 
 /* ── Library sections (Recent · Stem Collections · Tags) ── */
 .lib-section {

@@ -369,13 +369,11 @@ fn extract_runtime_pack() -> Result<RuntimePackStatus, String> {
     if !extracted.join("backend").join("app").is_dir() {
         return Err("runtime archive did not contain runtime/backend/app".to_string());
     }
-    if !extracted
-        .join("python")
-        .join("bin")
-        .join("python")
-        .is_file()
-    {
-        return Err("runtime archive did not contain runtime/python/bin/python".to_string());
+    let extracted_python = resolve_python_executable(&extracted.join("python")).ok_or_else(|| {
+        "runtime archive did not contain a runnable python under runtime/python/bin".to_string()
+    })?;
+    if !python_stdlib_ok(&extracted_python) {
+        return Err("runtime archive python failed stdlib check".to_string());
     }
 
     let install_manifest = serde_json::json!({
@@ -404,7 +402,8 @@ fn extract_runtime_pack() -> Result<RuntimePackStatus, String> {
     let _ = fs::remove_dir_all(&tmp);
     let _ = fs::remove_dir_all(&old);
 
-    let python = runtime.join("python").join("bin").join("python");
+    let python = resolve_python_executable(&runtime.join("python"))
+        .unwrap_or_else(|| runtime.join("python").join("bin").join("python"));
     patch_pyvenv_cfg(&python);
     runtime_pack_status()
 }
@@ -549,6 +548,7 @@ fn ensure_torch_device() -> Result<GpuSetup, String> {
     let root = app_root()?;
     let data_dir = local_data_dir()?;
 
+    #[cfg(not(target_os = "macos"))]
     // CPU-only portable build: skip GPU detection and pip entirely.
     if is_cpu_only_package(&root, &data_dir) {
         persist_torch_device(&data_dir, "cpu");
@@ -574,7 +574,7 @@ fn ensure_torch_device() -> Result<GpuSetup, String> {
         Ok(GpuSetup {
             gpu_detected: mps_available,
             gpu_name: if mps_available {
-                Some("Apple Silicon (MPS)".to_string())
+                Some("Metal (MPS)".to_string())
             } else {
                 None
             },
@@ -614,7 +614,15 @@ fn ensure_torch_device() -> Result<GpuSetup, String> {
 }
 
 fn is_cpu_only_package(root: &Path, data_dir: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = (root, data_dir);
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
     root.join("cpu-only").is_file() || data_dir.join("cpu-only").is_file()
+    }
 }
 
 fn persist_torch_device(data_dir: &std::path::Path, device: &str) {
@@ -1082,10 +1090,20 @@ fn runtime_dir(data_dir: &Path) -> PathBuf {
 }
 
 fn runtime_python_path(data_dir: &Path) -> PathBuf {
-    runtime_dir(data_dir)
-        .join("python")
-        .join("bin")
-        .join("python")
+    let root = runtime_dir(data_dir).join("python");
+    resolve_python_executable(&root).unwrap_or_else(|| root.join("bin").join("python"))
+}
+
+fn resolve_python_executable(python_root: &Path) -> Option<PathBuf> {
+    let bin = python_root.join("bin");
+    let candidates = ["python", "python3", "python3.13", "python3.12", "python3.11", "python3.10"];
+    for name in candidates {
+        let path = bin.join(name);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
 }
 
 fn runtime_manifest_path(root: &Path) -> Option<PathBuf> {
@@ -1403,6 +1421,11 @@ fn python_path(root: &Path) -> Option<PathBuf> {
     } else {
         vec![
             root.join("python").join("bin").join("python"),
+            root.join("python").join("bin").join("python3"),
+            root.join("python").join("bin").join("python3.13"),
+            root.join("python").join("bin").join("python3.12"),
+            root.join("python").join("bin").join("python3.11"),
+            root.join("python").join("bin").join("python3.10"),
             root.join(".venv").join("bin").join("python"),
             PathBuf::from("python3"),
         ]

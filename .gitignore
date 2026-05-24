@@ -73,3 +73,11 @@ Thumbs.db
 
 # Tool versions
 .python-version
+
+.build/
+.idea/
+poctests/
+
+ARCHITECTURE.md
+PLANS.md
+build.sh
