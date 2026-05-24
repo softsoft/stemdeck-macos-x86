@@ -82,3 +82,30 @@ def test_configure_portable_environment_leaves_dev_cache_env_alone(monkeypatch):
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
         monkeypatch.delenv("TORCH_HOME", raising=False)
         importlib.reload(original)
+
+
+def test_processing_mode_normalization_and_model_resolve(monkeypatch):
+    import app.core.config as config
+
+    original = config
+    monkeypatch.setenv("STEMDECK_DEFAULT_MODE", "hq")
+    monkeypatch.setenv("STEMDECK_DEMUCS_MODEL", "htdemucs_6s")
+    monkeypatch.setenv("STEMDECK_DEMUCS_MODEL_FAST", "htdemucs")
+    monkeypatch.setenv("STEMDECK_DEMUCS_MODEL_HQ", "htdemucs_ft")
+    monkeypatch.setenv("STEMDECK_DEMUCS_MODEL_HQ_ENHANCED", "htdemucs_6s")
+    try:
+        reloaded = importlib.reload(config)
+        assert reloaded.normalize_processing_mode("fast") == "fast"
+        assert reloaded.normalize_processing_mode("HQ_ENHANCED") == "hq_enhanced"
+        assert reloaded.normalize_processing_mode("unknown") == "hq"
+        assert reloaded.resolve_demucs_model("fast") == "htdemucs"
+        assert reloaded.resolve_demucs_model("hq") == "htdemucs_ft"
+        assert reloaded.resolve_demucs_model("hq_enhanced") == "htdemucs_6s"
+        assert reloaded.resolve_demucs_model("bad-mode") == "htdemucs_ft"
+    finally:
+        monkeypatch.delenv("STEMDECK_DEFAULT_MODE", raising=False)
+        monkeypatch.delenv("STEMDECK_DEMUCS_MODEL", raising=False)
+        monkeypatch.delenv("STEMDECK_DEMUCS_MODEL_FAST", raising=False)
+        monkeypatch.delenv("STEMDECK_DEMUCS_MODEL_HQ", raising=False)
+        monkeypatch.delenv("STEMDECK_DEMUCS_MODEL_HQ_ENHANCED", raising=False)
+        importlib.reload(original)

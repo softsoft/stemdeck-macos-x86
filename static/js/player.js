@@ -712,7 +712,9 @@ export function wireUpAudio(jobId, stems, duration, thumbnail, mixUrl = null, ti
   // the user selected all 6 stems, the backend doesn't produce
   // original.wav, so it's simply not in `stems` and the mixer/sidebar
   // rows for it stay hidden.)
-  stems = stems.filter((s) => s.name === "original" || selectedStems.has(s.name));
+  stems = stems.filter(
+    (s) => s.name === "original" || s.name.endsWith("_clean") || selectedStems.has(s.name),
+  );
   _currentStems = stems;
   _mixUrl = mixUrl || null;
   _currentTitle = title || "";

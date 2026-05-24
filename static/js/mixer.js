@@ -7,6 +7,68 @@ import {
 } from "./state.js";
 import { storeGet, storeSetDebounced } from "./utils.js";
 
+let _vocalsContextMenuEl = null;
+
+function closeVocalsContextMenu() {
+  if (_vocalsContextMenuEl) {
+    _vocalsContextMenuEl.remove();
+    _vocalsContextMenuEl = null;
+  }
+}
+
+async function runVocalsReanalyze() {
+  if (!currentJobId) return;
+  try {
+    const res = await fetch(`/api/jobs/${currentJobId}/vocals/reanalyze`, { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+    window.dispatchEvent(
+      new CustomEvent("stemdeck:refresh-track", { detail: { trackId: currentJobId } }),
+    );
+  } catch (err) {
+    console.error("[mixer] vocals re-analyze failed:", err);
+    window.alert(`Vocals re-analyze failed: ${err?.message || err}`);
+  }
+}
+
+function openVocalsContextMenu(x, y) {
+  closeVocalsContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "stem-context-menu";
+  menu.innerHTML = `
+    <button type="button" class="stem-context-item" data-action="reload">Reload</button>
+    <button type="button" class="stem-context-item" data-action="reanalyze">Enchanced Re-analyze Vocals</button>
+  `;
+  document.body.appendChild(menu);
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const rect = menu.getBoundingClientRect();
+  const left = Math.max(8, Math.min(x, vw - rect.width - 8));
+  const top = Math.max(8, Math.min(y, vh - rect.height - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  _vocalsContextMenuEl = menu;
+
+  menu.addEventListener("click", async (e) => {
+    const item = e.target.closest(".stem-context-item");
+    if (!item) return;
+    const action = item.dataset.action;
+    closeVocalsContextMenu();
+    if (action === "reload") {
+      window.location.reload();
+      return;
+    }
+    if (action === "reanalyze") {
+      await runVocalsReanalyze();
+    }
+  });
+
+  window.setTimeout(() => {
+    document.addEventListener("click", closeVocalsContextMenu, { once: true });
+  }, 0);
+}
+
 function defaultMixerEntry() {
   return { volume: 1, muted: false, soloed: false };
 }
@@ -488,5 +550,15 @@ export function wireStemListControls() {
   }
   for (const btn of stemListEl.querySelectorAll(".stem-monitor")) {
     btn.addEventListener("click", () => soloOnlyStem(btn.dataset.stem));
+  }
+
+  const vocalsRow = stemListEl.querySelector('span[data-stem="vocals"]');
+  if (vocalsRow && vocalsRow.dataset.reanalyzeBound !== "1") {
+    vocalsRow.dataset.reanalyzeBound = "1";
+    vocalsRow.title = "Right-click: Reload / Re-analyze vocals";
+    vocalsRow.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      openVocalsContextMenu(e.clientX, e.clientY);
+    });
   }
 }

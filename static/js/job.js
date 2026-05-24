@@ -1,8 +1,9 @@
 import {
   form, urlInput, submitBtn, errorEl, jobBox, jobTitleEl, jobStageEl,
-  jobDetailEl, jobCancelBtn, progressEl, titleEl, bpmChip, keyChip,
+  jobDetailEl, jobEnhancedEl, jobQualityLinkEl, jobVocalsSplitEl, jobVocalsLinkEl,
+  jobCancelBtn, progressEl, titleEl, bpmChip, keyChip,
   eventSource, setEventSource, setCurrentJobId, currentJobId,
-  selectedStems,
+  selectedStems, modeSelectEl,
 } from "./state.js";
 import { destroyPlayer, wireUpAudio, setWaveformLoading, updateFooterTrack } from "./player.js";
 import { stagePhrases } from "./phrases.js";
@@ -20,6 +21,11 @@ const renderedJobs = new Set();
 const jobSources = new Map();
 
 const TERMINAL_STATUSES = new Set(["done", "error", "cancelled"]);
+
+function selectedMode() {
+  const mode = modeSelectEl?.value?.trim?.();
+  return mode || "hq";
+}
 
 function setSubmitProcessing(processing) {
   submitBtn.disabled = processing;
@@ -100,6 +106,20 @@ export function reset() {
   jobTitleEl.textContent = "";
   jobStageEl.textContent = "";
   jobDetailEl.textContent = "";
+  jobEnhancedEl?.classList.add("hidden");
+  if (jobEnhancedEl) jobEnhancedEl.textContent = "";
+  if (jobQualityLinkEl) {
+    jobQualityLinkEl.classList.add("hidden");
+    jobQualityLinkEl.removeAttribute("href");
+  }
+  if (jobVocalsSplitEl) {
+    jobVocalsSplitEl.classList.add("hidden");
+    jobVocalsSplitEl.textContent = "";
+  }
+  if (jobVocalsLinkEl) {
+    jobVocalsLinkEl.classList.add("hidden");
+    jobVocalsLinkEl.removeAttribute("href");
+  }
   progressEl.value = 0;
   setSubmitProcessing(false);
   setCurrentJobId(null);
@@ -115,6 +135,12 @@ function applyState(state) {
       stems: state.selected_stems || state.stems?.map((stem) => stem.name) || [...selectedStems],
       selectedStems: state.selected_stems || [...selectedStems],
       audioStems: state.stems || [],
+      mode: state.mode || selectedMode(),
+      enhancedApplied: Boolean(state.enhanced_applied),
+      enhancedQualityStatus: state.enhanced_quality_status || null,
+      enhancedFallbackReason: state.enhanced_fallback_reason || null,
+      vocalsSplitStatus: state.vocals_split_status || null,
+      vocalsSplitTracks: state.vocals_split_tracks || [],
       status: state.status,
       duration: state.duration,
       bpm: state.bpm,
@@ -198,6 +224,58 @@ function applyState(state) {
   // overwrite it from each SSE tick. The truthful backend stage goes
   // to the small detail line instead.
   jobDetailEl.textContent = state.stage || "";
+  if (jobEnhancedEl) {
+    if (state.mode === "hq_enhanced" && state.status === "done") {
+      if (state.enhanced_applied) {
+        const cleaned = Array.isArray(state.enhanced_cleaned_stems)
+          ? state.enhanced_cleaned_stems
+          : [];
+        const status = state.enhanced_quality_status || "improved";
+        if (cleaned.length > 0) {
+          jobEnhancedEl.textContent = `HQ Enhanced ${status}: cleaned ${cleaned.join(", ")}`;
+        } else {
+          jobEnhancedEl.textContent = `HQ Enhanced ${status}`;
+        }
+      } else {
+        jobEnhancedEl.textContent = state.enhanced_fallback_reason
+          ? `HQ Enhanced reverted: ${state.enhanced_fallback_reason}`
+          : "HQ Enhanced reverted";
+      }
+      jobEnhancedEl.classList.remove("hidden");
+      if (jobQualityLinkEl && state.job_id) {
+        jobQualityLinkEl.href = `/api/jobs/${state.job_id}/analysis/quality-report`;
+        jobQualityLinkEl.classList.remove("hidden");
+      }
+    } else {
+      jobEnhancedEl.textContent = "";
+      jobEnhancedEl.classList.add("hidden");
+      if (jobQualityLinkEl) {
+        jobQualityLinkEl.classList.add("hidden");
+        jobQualityLinkEl.removeAttribute("href");
+      }
+    }
+  }
+  if (jobVocalsSplitEl && jobVocalsLinkEl) {
+    const splitStatus = state.vocals_split_status;
+    const splitTracks = Array.isArray(state.vocals_split_tracks) ? state.vocals_split_tracks : [];
+    if (state.status === "done" && splitStatus) {
+      if (splitStatus === "created") {
+        jobVocalsSplitEl.textContent = `Vocals split: created (${splitTracks.join(", ") || "lead_vocal, backing_vocals"})`;
+      } else {
+        jobVocalsSplitEl.textContent = "Vocals split: skipped (low confidence)";
+      }
+      jobVocalsSplitEl.classList.remove("hidden");
+      if (state.job_id) {
+        jobVocalsLinkEl.href = `/api/jobs/${state.job_id}/analysis/vocals-report`;
+        jobVocalsLinkEl.classList.remove("hidden");
+      }
+    } else {
+      jobVocalsSplitEl.textContent = "";
+      jobVocalsSplitEl.classList.add("hidden");
+      jobVocalsLinkEl.classList.add("hidden");
+      jobVocalsLinkEl.removeAttribute("href");
+    }
+  }
   progressEl.value = Math.round((state.progress || 0) * 100);
 
   // Cancel button is visible exactly while the job is in a non-terminal state.
@@ -391,6 +469,7 @@ export function wireJobForm() {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("stems", JSON.stringify([...selectedStems]));
+      fd.append("mode", selectedMode());
       fetchInit = { method: "POST", body: fd };
     } else {
       fetchInit = {
@@ -401,6 +480,7 @@ export function wireJobForm() {
           // Backend uses this to decide whether to ffmpeg-amix a
           // "selected stems" track (mix.wav) at the end of the pipeline.
           stems: [...selectedStems],
+          mode: selectedMode(),
         }),
       };
     }
@@ -428,6 +508,11 @@ export function wireJobForm() {
       stems: [...selectedStems],
       selectedStems: [...selectedStems],
       audioStems: [],
+      mode: selectedMode(),
+      enhancedApplied: false,
+      enhancedFallbackReason: null,
+      vocalsSplitStatus: null,
+      vocalsSplitTracks: [],
       status: "processing",
       bpm: null,
       key: null,

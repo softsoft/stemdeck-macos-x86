@@ -86,6 +86,11 @@ Original repository: https://github.com/stemdeckapp/stemdeck
 
 **6-stem separation** via Demucs `htdemucs_6s`, with auto-detection of the best Torch device (CUDA on NVIDIA, MPS on Apple Silicon, CPU fallback).
 
+**Processing modes** for quality/speed tradeoffs:
+- `Fast` — lower latency baseline split.
+- `HQ` — higher quality default split.
+- `HQ Enhanced` — HQ split + additional stem cleanup pass with safe fallback to HQ if cleanup fails.
+
 **YouTube and local file import.** Paste a YouTube URL or drop an MP3 or WAV directly onto the import bar.
 
 **DAW-style waveform editor** with min/max sample rendering across all stems, shared normalization, zoom in/out/Fit, loop drag on the ruler, gold playhead overlay, and stem-aligned lanes.
@@ -291,12 +296,15 @@ Stems land in `./jobs/` on the host. Demucs weights are cached in a named volume
 ## How to Use
 
 1. On the import bar, click stem chips to choose which stems to extract (defaults to all 6).
-2. Paste a YouTube URL **or** drop an MP3/WAV file, then click **Process**.
-3. Wait through `Uploading...` / `Downloading...` → `Analyzing...` → `Separating...` → `Mixing tracks...`.
-4. When done, the studio dashboard appears. If you picked a subset, the first lane is **Original** (full song minus your selection); the rest are your isolated stems.
-5. Mix: **Play/Pause/Stop** controls the master transport. **M** mutes a stem, **S** solos it (additive; multiple solos stay audible), **Monitor** solos only that stem and clears others. The volume fader moves 1:1 with drag; double-click resets to 0 dB; `Shift+wheel` gives coarse adjustment and plain wheel gives fine. The **Reset**, **Mute**, and **Solo** toolbar buttons act on all stems at once.
-6. Drag on the ruler to define a loop region; click `Loop` to enable. Use `+` / `-` / `Fit` or `Ctrl/Cmd+wheel` to zoom.
-7. **Download Mix** in the footer gives you a WAV of your selected stems summed together.
+2. Choose processing mode (`Fast`, `HQ`, or `HQ Enhanced`).
+3. Paste a YouTube URL **or** drop an MP3/WAV file, then click **Process**.
+4. Wait through `Uploading...` / `Downloading...` → `Analyzing...` → `Separating...` → `Mixing tracks...`.
+5. When done, the studio dashboard appears. If you picked a subset, the first lane is **Original** (full song minus your selection); the rest are your isolated stems.
+6. Mix: **Play/Pause/Stop** controls the master transport. **M** mutes a stem, **S** solos it (additive; multiple solos stay audible), **Monitor** solos only that stem and clears others. The volume fader moves 1:1 with drag; double-click resets to 0 dB; `Shift+wheel` gives coarse adjustment and plain wheel gives fine. The **Reset**, **Mute**, and **Solo** toolbar buttons act on all stems at once.
+7. Drag on the ruler to define a loop region; click `Loop` to enable. Use `+` / `-` / `Fit` or `Ctrl/Cmd+wheel` to zoom.
+8. **Download Mix** in the footer gives you a WAV of your selected stems summed together.
+
+When `HQ Enhanced` is selected, the job panel shows whether enhanced cleanup was applied or whether it fell back to plain HQ.
 
 **Keyboard shortcuts:** `Space` play/pause · `[` seek -5s · `]` seek +5s · `L` loop · `I` loop in · `O` loop out
 
@@ -308,6 +316,10 @@ Stems land in `./jobs/` on the host. Demucs weights are cached in a named volume
 |---|---|---|
 | `STEMDECK_DEMUCS_DEVICE` | auto | Force Torch device: `cuda`, `mps`, or `cpu`. |
 | `STEMDECK_DEMUCS_MODEL` | `htdemucs_6s` | Demucs model name. |
+| `STEMDECK_DEFAULT_MODE` | `hq` | Default processing mode (`fast`, `hq`, `hq_enhanced`). |
+| `STEMDECK_DEMUCS_MODEL_FAST` | `htdemucs` | Model used for `fast` mode. |
+| `STEMDECK_DEMUCS_MODEL_HQ` | `STEMDECK_DEMUCS_MODEL` | Model used for `hq` mode. |
+| `STEMDECK_DEMUCS_MODEL_HQ_ENHANCED` | `STEMDECK_DEMUCS_MODEL` | Primary split model for `hq_enhanced` mode. |
 | `STEMDECK_JOBS_DIR` | `./jobs` | Where job directories land. |
 | `STEMDECK_DATA_DIR` | (none) | Portable mode root; sets all sub-dirs below to live inside it. |
 | `STEMDECK_CACHE_DIR` | `<data>/cache` | Torch model cache directory. |

@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-from app.core.config import DEMUCS_DEVICE, DEMUCS_MODEL, TIMEOUT_DEMUCS_STALL
+from app.core.config import DEMUCS_DEVICE, TIMEOUT_DEMUCS_STALL, resolve_demucs_model
 from app.core.models import Job, JobCancelled, _set
 from app.core.registry import set_proc
 
@@ -23,13 +23,21 @@ _PCT_RE = re.compile(r"(\d{1,3})%")
 
 def separate(job: Job, source: Path, job_dir: Path) -> Path:
     _set(job, status="separating", progress=0.0, stage="Separating stems...")
+    demucs_model = resolve_demucs_model(job.mode)
+    logger.info(
+        "[%s] separation config: mode=%s model=%s device=%s",
+        job.id,
+        job.mode,
+        demucs_model,
+        DEMUCS_DEVICE,
+    )
 
     cmd = [
         sys.executable,
         "-m",
         "demucs",
         "-n",
-        DEMUCS_MODEL,
+        demucs_model,
         "-d",
         DEMUCS_DEVICE,
         "-o",
@@ -121,7 +129,7 @@ def separate(job: Job, source: Path, job_dir: Path) -> Path:
         last = tail[-1] if tail else f"exit status {proc.returncode}"
         raise RuntimeError(f"demucs failed: {last}")
 
-    stems_root = job_dir / DEMUCS_MODEL / source.stem
+    stems_root = job_dir / demucs_model / source.stem
     if not stems_root.is_dir():
         raise RuntimeError(f"demucs output not found at {stems_root}")
     return stems_root

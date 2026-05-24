@@ -63,6 +63,17 @@
           <!-- Divider -->
           <div class="daw-composer-sep"></div>
 
+          <div class="daw-mode-section">
+            <label class="daw-extract-label" for="modeSelect">Mode</label>
+            <select id="modeSelect" class="daw-mode-select" aria-label="Processing mode">
+              <option value="fast">Fast</option>
+              <option value="hq" selected>HQ</option>
+              <option value="hq_enhanced">HQ Enhanced</option>
+            </select>
+          </div>
+
+          <div class="daw-composer-sep"></div>
+
           <!-- Stem selection -->
           <div class="daw-stem-section">
             <span class="daw-extract-label">Extract</span>
@@ -168,7 +179,6 @@
               <span>Trash</span>
             </button>
             <div style="flex:1"></div>
-            <button class="rail-btn" id="settingsBtn" type="button" aria-label="Settings">
             <button class="rail-btn" id="settingsBtn" type="button" title="Settings" aria-label="Settings">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                 <circle cx="12" cy="12" r="3"/>
@@ -222,6 +232,26 @@
         <div id="lanes" class="daw-main">
 
           <!-- Job progress -->
+<<<<<<< HEAD
+=======
+          <div id="job" class="job hidden" role="status" aria-live="polite">
+            <div class="job-header">
+              <div id="job-title" class="title"></div>
+              <div id="job-stage" class="stage"></div>
+              <button id="job-cancel" class="cancel-btn hidden" type="button" aria-label="Cancel job">Cancel</button>
+            </div>
+            <progress id="progress" max="100" value="0"></progress>
+            <div id="job-detail" class="job-detail" aria-live="polite"></div>
+            <div id="job-enhanced" class="job-detail hidden" aria-live="polite"></div>
+            <a id="job-quality-link" class="job-detail hidden" href="#" target="_blank" rel="noopener noreferrer">
+              Open quality report (JSON)
+            </a>
+            <div id="job-vocals-split" class="job-detail hidden" aria-live="polite"></div>
+            <a id="job-vocals-link" class="job-detail hidden" href="#" target="_blank" rel="noopener noreferrer">
+              Open vocals report (JSON)
+            </a>
+          </div>
+>>>>>>> 49a9b93 (Add Enchanced Split mode)
           <div id="error" class="error hidden" role="alert"></div>
 
           <!-- Track header / info panel -->
@@ -541,6 +571,15 @@
                 <div class="daw-detail-row">
                   <span class="daw-detail-label">Quality</span>
                   <span class="daw-detail-val" id="track-quality">—</span>
+                </div>
+                <div class="daw-detail-row">
+                  <span class="daw-detail-label">Vocals Split</span>
+                  <span class="daw-detail-val" id="track-vocals-split">—</span>
+                </div>
+                <div class="daw-detail-row">
+                  <span class="daw-detail-label">Vocals Report</span>
+                  <a class="daw-detail-val hidden" id="track-vocals-link" href="#" target="_blank" rel="noopener noreferrer">Open JSON</a>
+                  <span class="daw-detail-val" id="track-vocals-link-empty">—</span>
                 </div>
               </div>
             </div>

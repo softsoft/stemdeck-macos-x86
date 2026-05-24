@@ -2,7 +2,7 @@ import {
   playBtn, loopBtn, multitrack, totalDuration, loopEnabled, loopStart, loopEnd,
   setLoopStart, setLoopEnd, selectedStems, saveSelectedStems, stemSelectionReady,
 } from "./state.js";
-import { STEM_NAMES, syncStemNamesFromAPI } from "./constants.js";
+import { DEFAULT_PROCESSING_MODE, PROCESSING_MODES, STEM_NAMES, syncStemNamesFromAPI } from "./constants.js";
 import { renderEmptyShell, buildStripStems, downloadCurrentMix, downloadCurrentMixMp3, downloadAllStemsZip, downloadRegionMix, downloadRegionMixMp3, drawFooterPlaceholder } from "./player.js";
 import { wireJobForm, showError } from "./job.js";
 import { wireTransportButtons } from "./transport.js";
@@ -97,7 +97,30 @@ function wireAllButton() {
 
 // ─── Wire everything up ───
 
-syncStemNamesFromAPI().then(() => buildStripStems());
+function syncModeSelectFromAPIConfig() {
+  const select = document.getElementById("modeSelect");
+  if (!select) return;
+  const allowed = new Set(PROCESSING_MODES);
+  for (const opt of [...select.options]) {
+    if (!allowed.has(opt.value)) opt.remove();
+  }
+  for (const value of PROCESSING_MODES) {
+    if (![...select.options].some((o) => o.value === value)) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = value
+        .replace(/_/g, " ")
+        .replace(/\b\w/g, (c) => c.toUpperCase());
+      select.appendChild(opt);
+    }
+  }
+  select.value = allowed.has(DEFAULT_PROCESSING_MODE) ? DEFAULT_PROCESSING_MODE : "hq";
+}
+
+syncStemNamesFromAPI().then(() => {
+  buildStripStems();
+  syncModeSelectFromAPIConfig();
+});
 wireJobForm();
 wireTransportButtons();
 wireFooterControls();

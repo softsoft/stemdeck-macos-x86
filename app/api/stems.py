@@ -20,22 +20,26 @@ logger = logging.getLogger("stemdeck.api")
 
 router = APIRouter(tags=["stems"])
 
-# Stem files served by this endpoint: the 6 demucs stems + two
-# pipeline-produced extras. "original" is the re-encoded source song
-# (added when the user picked a strict subset), "mix" is the ffmpeg
-# amix of the user's selected stems.
-_ALLOWED_NAMES = frozenset(STEM_NAMES) | {"original", "mix"}
+_STEM_NAME_RE = re.compile(r"^[a-z0-9_]{1,64}$")
 
 
 def _validate_stem_path(job_id: str, name: str):
     """Shared guard: validate job_id, name, job state, and path. Returns resolved Path."""
     if not JOB_ID_RE.match(job_id):
         raise HTTPException(status_code=404, detail="job not found")
-    if name not in _ALLOWED_NAMES:
+    if not _STEM_NAME_RE.match(name):
         raise HTTPException(status_code=404, detail="unknown stem")
     job = registry_get(job_id)
     if job is None or job.status != "done":
         raise HTTPException(status_code=404, detail="job not ready")
+    allowed_names = {item.get("name") for item in (job.stems or []) if isinstance(item, dict)}
+    allowed_names = {n for n in allowed_names if isinstance(n, str)}
+    # Legacy compatibility: old jobs/tests may not have job.stems populated.
+    allowed_names.update(STEM_NAMES)
+    allowed_names.add("original")
+    allowed_names.add("mix")  # virtual alias to selected mix output
+    if name not in allowed_names:
+        raise HTTPException(status_code=404, detail="unknown stem")
     path = (JOBS_DIR / job_id / "stems" / f"{name}.wav").resolve()
     if not path.is_file() or not path.is_relative_to(JOBS_DIR.resolve()):
         raise HTTPException(status_code=404, detail="stem not found")

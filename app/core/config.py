@@ -17,6 +17,14 @@ def _env_path(name: str, default: Path) -> Path:
     return Path(raw).expanduser().resolve() if raw else default
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        return default
+
+
 def _detect_device() -> str:
     """Pick best available Torch device for Demucs. Override via
     STEMDECK_DEMUCS_DEVICE env var ('cuda' | 'mps' | 'cpu'). Apple Silicon
@@ -68,12 +76,39 @@ FFPROBE_BIN = _env_path(
 )
 DEMUCS_MODEL = os.environ.get("STEMDECK_DEMUCS_MODEL", "htdemucs_6s").strip() or "htdemucs_6s"
 DEMUCS_DEVICE = _detect_device()
+PROCESSING_MODES: tuple[str, ...] = ("fast", "hq", "hq_enhanced")
+DEFAULT_PROCESSING_MODE = os.environ.get("STEMDECK_DEFAULT_MODE", "hq").strip().lower() or "hq"
+if DEFAULT_PROCESSING_MODE not in PROCESSING_MODES:
+    DEFAULT_PROCESSING_MODE = "hq"
+MODE_TO_DEMUCS_MODEL: dict[str, str] = {
+    "fast": os.environ.get("STEMDECK_DEMUCS_MODEL_FAST", "htdemucs").strip() or "htdemucs",
+    "hq": os.environ.get("STEMDECK_DEMUCS_MODEL_HQ", DEMUCS_MODEL).strip() or DEMUCS_MODEL,
+    "hq_enhanced": os.environ.get("STEMDECK_DEMUCS_MODEL_HQ_ENHANCED", DEMUCS_MODEL).strip()
+    or DEMUCS_MODEL,
+}
 MAX_DURATION_SEC = max(60, _env_int("STEMDECK_MAX_DURATION_SEC", 1200))  # 20 min default
 JOB_TTL_SECONDS = max(300, _env_int("STEMDECK_JOB_TTL_SECONDS", 24 * 3600))  # 24 h default
 MAX_PENDING_JOBS = max(1, min(50, _env_int("STEMDECK_MAX_PENDING_JOBS", 3)))
 TIMEOUT_FFMPEG = _env_int("STEMDECK_TIMEOUT_FFMPEG", 300)
 TIMEOUT_ANALYZE = _env_int("STEMDECK_TIMEOUT_ANALYZE", 120)
 TIMEOUT_DEMUCS_STALL = _env_int("STEMDECK_TIMEOUT_DEMUCS_STALL", 1800)
+ENHANCED_MAX_STEMS_TO_CLEAN = max(1, min(6, _env_int("STEMDECK_ENHANCED_MAX_STEMS_TO_CLEAN", 2)))
+ENHANCED_MIN_IMPROVEMENT_FRAC = max(
+    0.0,
+    min(0.9, _env_float("STEMDECK_ENHANCED_MIN_IMPROVEMENT_FRAC", 0.03)),
+)
+
+
+def normalize_processing_mode(raw: str | None) -> str:
+    mode = (raw or "").strip().lower()
+    if mode in PROCESSING_MODES:
+        return mode
+    return DEFAULT_PROCESSING_MODE
+
+
+def resolve_demucs_model(mode: str | None) -> str:
+    normalized = normalize_processing_mode(mode)
+    return MODE_TO_DEMUCS_MODEL.get(normalized, DEMUCS_MODEL)
 
 
 def ffmpeg_executable() -> str:

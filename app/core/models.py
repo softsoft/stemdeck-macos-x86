@@ -50,6 +50,13 @@ class Job:
     # mix down only the selected ones into mix.wav so the user can
     # download a single track containing just their chosen stems.
     selected_stems: list[str] = field(default_factory=list)
+    mode: str = "hq"
+    enhanced_applied: bool = False
+    enhanced_cleaned_stems: list[str] = field(default_factory=list)
+    enhanced_quality_status: str | None = None  # improved | unchanged | reverted
+    enhanced_fallback_reason: str | None = None
+    vocals_split_status: str | None = None  # created | skipped
+    vocals_split_tracks: list[str] = field(default_factory=list)
     mix_url: str | None = None  # populated when a strict subset was selected
     source_url: str | None = None  # original URL or "local:<filename>" for file uploads
     error: str | None = None
@@ -82,6 +89,13 @@ class Job:
             "tags": self.tags,
             "stems": self.stems,
             "selected_stems": self.selected_stems,
+            "mode": self.mode,
+            "enhanced_applied": self.enhanced_applied,
+            "enhanced_cleaned_stems": self.enhanced_cleaned_stems,
+            "enhanced_quality_status": self.enhanced_quality_status,
+            "enhanced_fallback_reason": self.enhanced_fallback_reason,
+            "vocals_split_status": self.vocals_split_status,
+            "vocals_split_tracks": self.vocals_split_tracks,
             "mix_url": self.mix_url,
             "source_url": self.source_url,
             "error": self.error,

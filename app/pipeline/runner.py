@@ -19,6 +19,7 @@ from app.pipeline.collect import (
     make_selected_mix,
 )
 from app.pipeline.download import download
+from app.pipeline.enhanced_cleanup import run_enhanced_cleanup
 from app.pipeline.separate import separate
 
 logger = logging.getLogger("stemdeck.pipeline")
@@ -31,6 +32,24 @@ def _rmtree(path: Path) -> None:
         pass
     except Exception:
         logger.warning("failed to remove %s", path, exc_info=True)
+
+
+def _list_stem_names(stems_dir: Path) -> list[str]:
+    names: list[str] = []
+    for wav in sorted(stems_dir.glob("*.wav")):
+        names.append(wav.stem)
+    return names
+
+
+def _friendly_enhanced_error(exc: Exception) -> str:
+    msg = str(exc).strip().lower()
+    if "module not found" in msg or "no module named" in msg:
+        return "cleanup dependencies are unavailable"
+    if "memory" in msg or "oom" in msg:
+        return "insufficient memory for cleanup pass"
+    if "ffmpeg" in msg:
+        return "audio toolchain error during cleanup"
+    return "cleanup pass failed; used HQ output"
 
 
 # Only one heavy job runs at a time -- Demucs is GPU/CPU-hungry.
@@ -91,11 +110,26 @@ def _run_common(job: Job, source: Path, job_dir: Path) -> None:
     found = collect(job, stems_root, job_dir)
     stems_dir = job_dir / "stems"
     job.stem_presence = compute_stem_presence(stems_dir, found)
+    if job.mode == "hq_enhanced":
+        _set(job, stage="Enhanced cleanup...")
+        try:
+            report = run_enhanced_cleanup(job, stems_dir, found, job_dir)
+            job.enhanced_applied = bool(report.get("enhanced_applied"))
+            job.enhanced_cleaned_stems = list(report.get("cleaned_stems") or [])
+            job.enhanced_quality_status = str(report.get("quality_status") or "unchanged")
+            job.enhanced_fallback_reason = None
+        except Exception as e:
+            logger.warning("[%s] enhanced cleanup fallback: %s", job.id, e, exc_info=True)
+            job.enhanced_applied = False
+            job.enhanced_cleaned_stems = []
+            job.enhanced_quality_status = "reverted"
+            job.enhanced_fallback_reason = _friendly_enhanced_error(e)
     # Source (100-300 MB or the local upload) is no longer needed after
     # collect; delete it before the ffmpeg amix steps in case scratch space
     # is tight.
     cleanup_source(job_dir)
-    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in found]
+    stem_names = _list_stem_names(stems_dir)
+    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in stem_names]
     _check_cancel(job)
     _set(job, stage="Mixing tracks...")
     original_path = make_original_track(job, job_dir, stems_dir)
@@ -111,6 +145,9 @@ def _run_common(job: Job, source: Path, job_dir: Path) -> None:
     mix_path = make_selected_mix(job, stems_dir, found)
     if mix_path is not None:
         job.mix_url = f"/api/jobs/{job.id}/stems/{mix_path.name}"
+    # Refresh stems list after post-processing (original.wav / mix.wav / *_clean.wav).
+    stem_names = _list_stem_names(stems_dir)
+    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in stem_names]
     _check_cancel(job)
 
     all_stem_names = [s["name"] for s in job.stems]
@@ -146,6 +183,11 @@ def _write_metadata(job: Job, job_dir: Path) -> None:
         "tempo_stability": job.tempo_stability,
         "stem_presence": job.stem_presence,
         "tags": job.tags,
+        "mode": job.mode,
+        "enhanced_applied": job.enhanced_applied,
+        "enhanced_cleaned_stems": job.enhanced_cleaned_stems,
+        "enhanced_quality_status": job.enhanced_quality_status,
+        "enhanced_fallback_reason": job.enhanced_fallback_reason,
     }
     try:
         (job_dir / "metadata.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")

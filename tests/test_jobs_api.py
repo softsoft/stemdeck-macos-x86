@@ -73,6 +73,25 @@ def test_post_accepts_youtube_url(client):
     assert len(r.json()["job_id"]) == 12
 
 
+def test_post_accepts_mode(client):
+    r = client.post(
+        "/api/jobs",
+        json={"url": "https://youtu.be/dQw4w9WgXcQ", "mode": "hq_enhanced"},
+    )
+    assert r.status_code == 200
+    job_id = r.json()["job_id"]
+    assert _jobs[job_id].mode == "hq_enhanced"
+
+
+def test_post_rejects_invalid_mode(client):
+    r = client.post(
+        "/api/jobs",
+        json={"url": "https://youtu.be/dQw4w9WgXcQ", "mode": "turbo"},
+    )
+    assert r.status_code == 422
+    assert "Unsupported mode" in r.json()["detail"]
+
+
 def test_get_unknown_job_returns_404(client):
     r = client.get("/api/jobs/000000000000")
     assert r.status_code == 404
@@ -173,6 +192,29 @@ def test_upload_wav_returns_job_id(upload_client):
     assert "job_id" in r.json()
 
 
+def test_upload_accepts_mode(upload_client):
+    data = io.BytesIO(b"RIFF" + b"\x00" * 128)
+    r = upload_client.post(
+        "/api/jobs",
+        data={"mode": "fast"},
+        files={"file": ("my_track.wav", data, "audio/wav")},
+    )
+    assert r.status_code == 200
+    job_id = r.json()["job_id"]
+    assert _jobs[job_id].mode == "fast"
+
+
+def test_upload_rejects_invalid_mode(upload_client):
+    data = io.BytesIO(b"RIFF" + b"\x00" * 128)
+    r = upload_client.post(
+        "/api/jobs",
+        data={"mode": "turbo"},
+        files={"file": ("my_track.wav", data, "audio/wav")},
+    )
+    assert r.status_code == 422
+    assert "Unsupported mode" in r.json()["detail"]
+
+
 # ─── Sections endpoint ────────────────────────────────────────────────────────
 
 
@@ -204,6 +246,61 @@ def test_sections_happy_path(client, done_job, tmp_path):
     assert meta_path.is_file()
     meta = json.loads(meta_path.read_text())
     assert meta["sections"][0]["id"] == "sec1"
+
+
+def test_quality_report_happy_path(client, done_job, tmp_path):
+    analysis_dir = tmp_path / done_job.id / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    report = {"version": 1, "enhanced_applied": True, "cleaned_stems": ["guitar"]}
+    (analysis_dir / "quality_report.json").write_text(json.dumps(report) + "\n", encoding="utf-8")
+    r = client.get(f"/api/jobs/{done_job.id}/analysis/quality-report")
+    assert r.status_code == 200
+    assert r.json()["enhanced_applied"] is True
+
+
+def test_vocals_reanalyze_happy_path(client, done_job, tmp_path, monkeypatch):
+    import app.api.jobs as jobs_mod
+
+    stems_dir = tmp_path / done_job.id / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    (stems_dir / "vocals.wav").write_bytes(b"RIFF")
+
+    for stem in ["vocals", "drums"]:
+        done_job.stems.append({"name": stem, "url": f"/api/jobs/{done_job.id}/stems/{stem}.wav"})
+
+    def _fake_run(job_id, job_dir):
+        (job_dir / "stems" / "lead_vocal.wav").write_bytes(b"RIFF")
+        (job_dir / "stems" / "backing_vocals.wav").write_bytes(b"RIFF")
+        analysis_dir = job_dir / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        (analysis_dir / "vocals_report.json").write_text(
+            json.dumps({"status": "created", "created_tracks": ["lead_vocal", "backing_vocals"]}) + "\n",
+            encoding="utf-8",
+        )
+        return {"status": "created", "created_tracks": ["lead_vocal", "backing_vocals"]}
+
+    monkeypatch.setattr(jobs_mod, "run_vocals_reanalyze", _fake_run)
+
+    r = client.post(f"/api/jobs/{done_job.id}/vocals/reanalyze")
+    assert r.status_code == 200
+    assert r.json()["vocals_split_status"] == "created"
+    assert "lead_vocal" in r.json()["created_tracks"]
+    assert any(stem["name"] == "lead_vocal" for stem in done_job.stems)
+
+
+def test_vocals_report_happy_path(client, done_job, tmp_path):
+    analysis_dir = tmp_path / done_job.id / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    report = {"version": 1, "status": "skipped", "created_tracks": []}
+    (analysis_dir / "vocals_report.json").write_text(json.dumps(report) + "\n", encoding="utf-8")
+    r = client.get(f"/api/jobs/{done_job.id}/analysis/vocals-report")
+    assert r.status_code == 200
+    assert r.json()["status"] == "skipped"
+
+
+def test_quality_report_missing_returns_404(client, done_job):
+    r = client.get(f"/api/jobs/{done_job.id}/analysis/quality-report")
+    assert r.status_code == 404
 
 
 def test_sections_unknown_job_returns_404(client):

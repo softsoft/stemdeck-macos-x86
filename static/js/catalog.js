@@ -283,6 +283,12 @@ function stateMetadataToTrack(state, fallbackTrack) {
     sections: state.sections ?? fallbackTrack.sections ?? null,
     sourceUrl: state.source_url || fallbackTrack.sourceUrl,
     mixUrl: state.mix_url ?? fallbackTrack.mixUrl ?? null,
+    mode: state.mode ?? fallbackTrack.mode ?? "hq",
+    enhancedApplied: state.enhanced_applied ?? fallbackTrack.enhancedApplied ?? false,
+    enhancedFallbackReason:
+      state.enhanced_fallback_reason ?? fallbackTrack.enhancedFallbackReason ?? null,
+    vocalsSplitStatus: state.vocals_split_status ?? fallbackTrack.vocalsSplitStatus ?? null,
+    vocalsSplitTracks: state.vocals_split_tracks ?? fallbackTrack.vocalsSplitTracks ?? [],
     createdAt: fallbackTrack.createdAt ?? state.created_at,
     favorite: fallbackTrack.favorite ?? false,
   };
@@ -381,10 +387,34 @@ function applyTrackInfoToPanel(track) {
   const trackExtracted = document.getElementById("track-extracted");
   const trackSource = document.getElementById("track-source");
   const trackQuality = document.getElementById("track-quality");
+  const trackVocalsSplit = document.getElementById("track-vocals-split");
+  const trackVocalsLink = document.getElementById("track-vocals-link");
+  const trackVocalsLinkEmpty = document.getElementById("track-vocals-link-empty");
   const favBtn = document.getElementById("fav-btn");
   if (trackExtracted) trackExtracted.textContent = fmtExtracted(track.createdAt);
   if (trackSource) trackSource.textContent = deriveSource(track.sourceUrl);
   if (trackQuality) trackQuality.textContent = deriveQuality(track.sourceUrl);
+  if (trackVocalsSplit) {
+    if (track.vocalsSplitStatus === "created") {
+      const names = Array.isArray(track.vocalsSplitTracks) ? track.vocalsSplitTracks : [];
+      trackVocalsSplit.textContent = `created (${names.join(", ") || "lead_vocal, backing_vocals"})`;
+    } else if (track.vocalsSplitStatus === "skipped") {
+      trackVocalsSplit.textContent = "skipped (low confidence)";
+    } else {
+      trackVocalsSplit.textContent = "—";
+    }
+  }
+  if (trackVocalsLink && trackVocalsLinkEmpty) {
+    if (_currentTrackId && track.vocalsSplitStatus) {
+      trackVocalsLink.href = `/api/jobs/${_currentTrackId}/analysis/vocals-report`;
+      trackVocalsLink.classList.remove("hidden");
+      trackVocalsLinkEmpty.classList.add("hidden");
+    } else {
+      trackVocalsLink.classList.add("hidden");
+      trackVocalsLink.removeAttribute("href");
+      trackVocalsLinkEmpty.classList.remove("hidden");
+    }
+  }
   if (favBtn) {
     favBtn.classList.toggle("active", Boolean(track.favorite));
     favBtn.setAttribute("aria-pressed", String(Boolean(track.favorite)));
@@ -1596,4 +1626,10 @@ export async function initCatalog() {
 
   loadCurrentVersion().finally(checkForUpdate);
   syncWithServer();
+  window.addEventListener("stemdeck:refresh-track", async (event) => {
+    const trackId = String(event?.detail?.trackId || "");
+    if (!trackId || !tracks[trackId]) return;
+    await loadTrackIntoStudio(trackId);
+    render();
+  });
 }

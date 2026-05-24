@@ -6,6 +6,7 @@ import { STEM_NAMES } from "./constants.js";
 export const form = $("job-form");
 export const urlInput = $("url");
 export const submitBtn = $("submit");
+export const modeSelectEl = $("modeSelect");
 
 export const playBtn = $("t-play");
 export const playMiniBtn = $("t-play-mini");
@@ -24,6 +25,10 @@ export const jobBox = $("job");
 export const jobTitleEl = $("job-title");
 export const jobStageEl = $("job-stage");
 export const jobDetailEl = $("job-detail");
+export const jobEnhancedEl = $("job-enhanced");
+export const jobQualityLinkEl = $("job-quality-link");
+export const jobVocalsSplitEl = $("job-vocals-split");
+export const jobVocalsLinkEl = $("job-vocals-link");
 export const jobCancelBtn = $("job-cancel");
 export const progressEl = $("progress");
 

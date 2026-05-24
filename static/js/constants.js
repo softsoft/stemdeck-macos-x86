@@ -2,6 +2,8 @@
 // STEM_NAMES in app/core/config.py — the API is the canonical source.
 export let STEM_NAMES = ["vocals", "drums", "bass", "guitar", "piano", "other"];
 export let TRACK_NAMES = ["original", ...STEM_NAMES];
+export let PROCESSING_MODES = ["fast", "hq", "hq_enhanced"];
+export let DEFAULT_PROCESSING_MODE = "hq";
 
 export async function syncStemNamesFromAPI() {
   try {
@@ -11,6 +13,12 @@ export async function syncStemNamesFromAPI() {
     if (Array.isArray(data.stem_names) && data.stem_names.length > 0) {
       STEM_NAMES = data.stem_names;
       TRACK_NAMES = ["original", ...STEM_NAMES];
+    }
+    if (Array.isArray(data.processing_modes) && data.processing_modes.length > 0) {
+      PROCESSING_MODES = data.processing_modes;
+    }
+    if (typeof data.default_mode === "string" && data.default_mode) {
+      DEFAULT_PROCESSING_MODE = data.default_mode;
     }
   } catch (e) {
     console.warn("[constants] failed to sync stem names from API:", e);

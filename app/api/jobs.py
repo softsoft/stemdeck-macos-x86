@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
 from app.core.config import (
@@ -17,8 +18,10 @@ from app.core.config import (
     JOBS_DIR,
     MAX_DURATION_SEC,
     MAX_PENDING_JOBS,
+    PROCESSING_MODES,
     STEM_NAMES,
     ffprobe_executable,
+    normalize_processing_mode,
 )
 from app.core.models import Job
 from app.core.registry import all_jobs as registry_all_jobs
@@ -29,6 +32,7 @@ from app.core.registry import register_if_capacity as registry_register_if_capac
 from app.core.registry import remove as registry_remove
 from app.pipeline import run_local_pipeline, run_pipeline
 from app.pipeline.download import InvalidYouTubeURL, validate_youtube_url
+from app.pipeline.vocals_reanalyze import run_vocals_reanalyze
 
 router = APIRouter(tags=["jobs"])
 logger = logging.getLogger("stemdeck.api")
@@ -110,6 +114,17 @@ class JobRequest(BaseModel):
     # rejected, so a future model with extra stems doesn't break older
     # clients pinning the old set.
     stems: list[str] | None = None
+    mode: str | None = None
+
+    @field_validator("mode")
+    @classmethod
+    def _validate_mode(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        mode = value.strip().lower()
+        if mode not in PROCESSING_MODES:
+            raise ValueError(f"Unsupported mode '{value}'. Allowed: {', '.join(PROCESSING_MODES)}")
+        return mode
 
 
 @router.post("")
@@ -141,7 +156,8 @@ async def _create_youtube_job(request: Request) -> dict[str, str]:
     if not selected:
         selected = list(STEM_NAMES)
 
-    job = Job(id=uuid.uuid4().hex[:12], selected_stems=selected, source_url=url)
+    mode = normalize_processing_mode(payload.mode)
+    job = Job(id=uuid.uuid4().hex[:12], selected_stems=selected, source_url=url, mode=mode)
     if not registry_register_if_capacity(job, MAX_PENDING_JOBS):
         raise HTTPException(status_code=503, detail="Server busy, please try again later")
     task = asyncio.create_task(run_pipeline(job, url, JOBS_DIR))
@@ -168,6 +184,7 @@ async def _create_local_job(request: Request) -> dict[str, str]:
     form = await request.form()
     upload = form.get("file")
     stems_raw = form.get("stems", "[]")
+    mode_raw = str(form.get("mode", "") or "")
 
     if upload is None or not hasattr(upload, "filename"):
         raise HTTPException(status_code=422, detail="No file provided")
@@ -188,6 +205,12 @@ async def _create_local_job(request: Request) -> dict[str, str]:
     except (json.JSONDecodeError, ValueError):
         stems_list = []
     selected = [s for s in stems_list if s in STEM_NAMES] or list(STEM_NAMES)
+    if mode_raw.strip() and mode_raw.strip().lower() not in PROCESSING_MODES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported mode '{mode_raw}'. Allowed: {', '.join(PROCESSING_MODES)}",
+        )
+    mode = normalize_processing_mode(mode_raw)
 
     # Check actual file size (SpooledTemporaryFile is already buffered at this
     # point; seek/tell are fast and don't re-read the body).
@@ -229,6 +252,7 @@ async def _create_local_job(request: Request) -> dict[str, str]:
     job = Job(
         id=job_id,
         selected_stems=selected,
+        mode=mode,
         title=title,
         duration_sec=duration,
         source_url=local_source_url,
@@ -258,6 +282,78 @@ def get_job(job_id: str) -> dict:
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     return job.to_state()
+
+
+@router.get("/{job_id}/analysis/quality-report")
+def get_quality_report(job_id: str) -> JSONResponse:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    job = registry_get(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(status_code=404, detail="job not ready")
+    report_path = (JOBS_DIR / job_id / "analysis" / "quality_report.json").resolve()
+    if not report_path.is_file() or not report_path.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="quality report not found")
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise HTTPException(status_code=500, detail=f"failed to read quality report: {e}") from e
+    return JSONResponse(payload)
+
+
+@router.get("/{job_id}/analysis/vocals-report")
+def get_vocals_report(job_id: str) -> JSONResponse:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    job = registry_get(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(status_code=404, detail="job not ready")
+    report_path = (JOBS_DIR / job_id / "analysis" / "vocals_report.json").resolve()
+    if not report_path.is_file() or not report_path.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="vocals report not found")
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise HTTPException(status_code=500, detail=f"failed to read vocals report: {e}") from e
+    return JSONResponse(payload)
+
+
+@router.post("/{job_id}/vocals/reanalyze")
+async def reanalyze_vocals(job_id: str) -> dict:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    job = registry_get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status != "done":
+        raise HTTPException(status_code=409, detail="job is not ready")
+    job_dir = (JOBS_DIR / job_id).resolve()
+    if not job_dir.is_dir() or not job_dir.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="job not found")
+
+    try:
+        report = await asyncio.to_thread(run_vocals_reanalyze, job_id, job_dir)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except Exception as e:
+        logger.exception("vocals re-analyze failed for %s: %s", job_id, e)
+        raise HTTPException(status_code=500, detail=f"vocals re-analyze failed: {e}") from e
+
+    created_tracks = list(report.get("created_tracks") or [])
+    status = str(report.get("status") or "skipped")
+    job.vocals_split_status = status
+    job.vocals_split_tracks = created_tracks
+
+    stems_dir = job_dir / "stems"
+    stem_names = sorted(p.stem for p in stems_dir.glob("*.wav"))
+    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in stem_names]
+    registry_persist(JOBS_DIR)
+    return {
+        "job_id": job_id,
+        "vocals_split_status": status,
+        "created_tracks": created_tracks,
+        "report_url": f"/api/jobs/{job_id}/analysis/vocals-report",
+    }
 
 
 @router.post("/{job_id}/cancel")
