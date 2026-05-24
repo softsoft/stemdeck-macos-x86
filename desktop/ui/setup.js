@@ -298,11 +298,11 @@ async function runSetup() {
           ? [
               {
                 afterSeconds: 0,
-                text: "Checking Apple Silicon compute support...",
+                text: "Checking macOS Metal (MPS) compute support...",
               },
               {
                 afterSeconds: 10,
-                text: "Verifying MPS acceleration for AI models...",
+                text: "Verifying Metal (MPS) acceleration for AI models...",
               },
             ]
           : [
@@ -331,7 +331,7 @@ async function runSetup() {
           gpuSummary =
             gpu.torchDevice === "mps"
               ? `${gpu.gpuName} acceleration enabled`
-              : "MPS acceleration unavailable - stem separation will use CPU";
+              : "Metal (MPS) acceleration unavailable - stem separation will use CPU";
         } else {
           gpuSummary = gpu.gpuDetected
             ? gpu.cudaVerified

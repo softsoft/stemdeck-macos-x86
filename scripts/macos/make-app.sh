@@ -2,10 +2,25 @@
 set -euo pipefail
 
 ARCH="${ARCH:-arm64}"
-VERSION="${VERSION:-LOCAL_DEV_TEST}"
-VERSION="${VERSION#v}"
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD_DIR="${REPO_ROOT}/.build"
+
+to_semver() {
+  local raw="$1"
+  # Accept plain semver / semver+metadata / semver-prerelease.
+  if [[ "$raw" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+    echo "$raw"
+    return
+  fi
+
+  # Convert arbitrary local labels (e.g. LOCAL_DEV_TEST) into a valid semver prerelease.
+  local label
+  label="$(echo "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^0-9a-z]+/-/g; s/^-+//; s/-+$//')"
+  if [[ -z "$label" ]]; then
+    label="local-dev"
+  fi
+  echo "0.0.0-${label}"
+}
 
 if [[ "$(uname)" != "Darwin" ]]; then
   echo "ERROR: make-app.sh must run on macOS" >&2
@@ -17,6 +32,18 @@ if [[ "$ARCH" != "arm64" && "$ARCH" != "x64" ]]; then
   exit 1
 fi
 
+if [[ -z "${VERSION:-}" ]]; then
+  VERSION="$(
+    python3 - "$REPO_ROOT/pyproject.toml" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+m = re.search(r'(?m)^version\s*=\s*"([^"]+)"\s*$', text)
+print(m.group(1) if m else "0.6.0-alpha.2")
+PY
+  )"
+fi
+VERSION="${VERSION#v}"
+
 for cmd in node npm cargo; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ERROR: required command not found on PATH: $cmd" >&2
@@ -26,10 +53,14 @@ done
 
 mkdir -p "$BUILD_DIR"
 
-echo "==> Stamping version ${VERSION}"
-sed -i '' "s/^version = \".*\"/version = \"${VERSION}\"/" "$REPO_ROOT/desktop/src-tauri/Cargo.toml"
-sed -i '' "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$REPO_ROOT/desktop/src-tauri/tauri.conf.json"
-sed -i '' "s/\"version\": \".*\"/\"version\": \"${VERSION}\"/" "$REPO_ROOT/desktop/package.json"
+SEMVER_VERSION="$(to_semver "$VERSION")"
+if [[ "$SEMVER_VERSION" != "$VERSION" ]]; then
+  echo "==> Version '${VERSION}' is not semver; using '${SEMVER_VERSION}' for build metadata"
+fi
+echo "==> Stamping version ${SEMVER_VERSION}"
+sed -i '' "s/^version = \".*\"/version = \"${SEMVER_VERSION}\"/" "$REPO_ROOT/desktop/src-tauri/Cargo.toml"
+sed -i '' "s/\"version\": \".*\"/\"version\": \"${SEMVER_VERSION}\"/" "$REPO_ROOT/desktop/src-tauri/tauri.conf.json"
+sed -i '' "s/\"version\": \".*\"/\"version\": \"${SEMVER_VERSION}\"/" "$REPO_ROOT/desktop/package.json"
 
 cd "$REPO_ROOT/desktop"
 
