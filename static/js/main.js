@@ -6,7 +6,7 @@ import { DEFAULT_PROCESSING_MODE, PROCESSING_MODES, STEM_NAMES, syncStemNamesFro
 import { renderEmptyShell, buildStripStems, downloadCurrentMix, downloadCurrentMixMp3, downloadAllStemsZip, downloadRegionMix, downloadRegionMixMp3, drawFooterPlaceholder } from "./player.js";
 import { wireJobForm, showError } from "./job.js";
 import { wireTransportButtons } from "./transport.js";
-import { togglePlayPause, updateLoopRegionVisual } from "./transport.js";
+import { togglePlayPause, seekTransportTime, resumeTransportAfterSeek, updateLoopRegionVisual } from "./transport.js";
 import { wireStemListControls, wireMixerToolbar } from "./mixer.js";
 import { initCatalog } from "./catalog.js";
 import { runStoreMigrationIfNeeded } from "./utils.js";
@@ -248,19 +248,26 @@ function wireFooterControls() {
   // ── Scrub bar seek ──
   const scrub = document.getElementById("footer-scrub");
   if (scrub) {
+    let _scrubWasPlaying = false;
     function seekToX(clientX) {
       if (!multitrack || !totalDuration) return;
       const rect = scrub.getBoundingClientRect();
       const frac = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-      multitrack.setTime(frac * totalDuration);
+      seekTransportTime(frac * totalDuration, { resumeIfPlaying: false });
     }
     let _scrubbing = false;
     scrub.addEventListener("mousedown", (e) => {
       _scrubbing = true;
+      _scrubWasPlaying = Boolean(multitrack?.isPlaying?.());
       seekToX(e.clientX);
     });
     document.addEventListener("mousemove", (e) => { if (_scrubbing) seekToX(e.clientX); });
-    document.addEventListener("mouseup",   () => { _scrubbing = false; });
+    document.addEventListener("mouseup",   () => {
+      if (!_scrubbing) return;
+      _scrubbing = false;
+      if (_scrubWasPlaying) resumeTransportAfterSeek();
+      _scrubWasPlaying = false;
+    });
   }
 
   // ── Close panels on outside click ──
@@ -377,10 +384,10 @@ document.addEventListener("keydown", (e) => {
     togglePlayPause();
   } else if (e.code === "BracketLeft") {
     e.preventDefault();
-    multitrack.setTime(Math.max(0, multitrack.getCurrentTime() - 5));
+    seekTransportTime(Math.max(0, multitrack.getCurrentTime() - 5));
   } else if (e.code === "BracketRight") {
     e.preventDefault();
-    multitrack.setTime(
+    seekTransportTime(
       Math.min(multitrack.getDuration(), multitrack.getCurrentTime() + 5),
     );
   } else if (e.code === "KeyL") {

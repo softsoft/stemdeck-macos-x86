@@ -78,7 +78,5 @@ Thumbs.db
 .idea/
 poctests/
 
-ARCHITECTURE.md
-PLANS.md
-TODO.md
+PLANS/
 build.sh

@@ -45,12 +45,27 @@ function timeFromClientX(clientX) {
 }
 
 function setPlayheadTime(sec) {
+  seekTransportTime(sec);
+}
+
+// Seek can leave underlying media elements momentarily out of phase in
+// WKWebView while fresh byte ranges buffer. A quick pause->seek->resume
+// keeps stems locked similarly to manual Stop/Start.
+export function seekTransportTime(sec, { resumeIfPlaying = true } = {}) {
   if (!multitrack || !totalDuration) return;
   const next = Math.max(0, Math.min(totalDuration, sec));
+  const wasPlaying = multitrack.isPlaying();
+  if (wasPlaying) multitrack.pause();
   multitrack.setTime(next);
   updatePlayheadMarker(next);
   updateFooterTimes(next);
   updatePresencePlayhead(next);
+  if (wasPlaying && resumeIfPlaying) _playWhenReady();
+}
+
+export function resumeTransportAfterSeek() {
+  if (!multitrack || multitrack.isPlaying()) return;
+  _playWhenReady();
 }
 
 export function buildRuler(durationSec) {
