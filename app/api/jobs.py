@@ -32,6 +32,7 @@ from app.core.registry import register_if_capacity as registry_register_if_capac
 from app.core.registry import remove as registry_remove
 from app.pipeline import run_local_pipeline, run_pipeline
 from app.pipeline.download import InvalidYouTubeURL, validate_youtube_url
+from app.pipeline.enhanced_cleanup import run_enhanced_cleanup
 from app.pipeline.vocals_reanalyze import run_vocals_reanalyze
 
 router = APIRouter(tags=["jobs"])
@@ -413,6 +414,22 @@ class SectionsBody(BaseModel):
     sections: list[SectionItem]
 
 
+class EnhancedActionBody(BaseModel):
+    profile: str | None = None
+    max_stems_to_clean: int | None = None
+    min_improvement_frac: float | None = None
+
+    @field_validator("profile")
+    @classmethod
+    def _validate_profile(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        normalized = value.strip().lower()
+        if normalized not in {"balanced", "strong", "conservative"}:
+            raise ValueError("Unsupported profile. Allowed: balanced, strong, conservative")
+        return normalized
+
+
 @router.patch("/{job_id}/sections")
 def update_sections(job_id: str, body: SectionsBody) -> dict:
     """Save named timeline sections (intro, verse, chorus, etc.) for a done job."""
@@ -446,6 +463,106 @@ def update_sections(job_id: str, body: SectionsBody) -> dict:
     registry_persist(JOBS_DIR)
 
     return {"job_id": job_id, "sections": validated}
+
+
+@router.post("/{job_id}/analysis/reanalyze")
+async def rerun_enhanced_analysis(job_id: str, body: EnhancedActionBody | None = None) -> dict:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    job = registry_get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status != "done":
+        raise HTTPException(status_code=409, detail="job is not ready")
+    payload = body or EnhancedActionBody()
+    job_dir = (JOBS_DIR / job_id).resolve()
+    stems_dir = (job_dir / "stems").resolve()
+    if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="stems not found")
+    found = [name for name in STEM_NAMES if (stems_dir / f"{name}.wav").is_file()]
+    if not found:
+        raise HTTPException(status_code=404, detail="no base stems found")
+
+    try:
+        report = await asyncio.to_thread(
+            run_enhanced_cleanup,
+            job,
+            stems_dir,
+            found,
+            job_dir,
+            profile=payload.profile or "balanced",
+            max_stems_to_clean=payload.max_stems_to_clean,
+            min_improvement_frac=payload.min_improvement_frac,
+        )
+    except Exception as e:
+        logger.exception("enhanced re-analyze failed for %s: %s", job_id, e)
+        raise HTTPException(status_code=500, detail=f"enhanced re-analyze failed: {e}") from e
+
+    job.enhanced_applied = bool(report.get("enhanced_applied"))
+    job.enhanced_cleaned_stems = list(report.get("cleaned_stems") or [])
+    job.enhanced_quality_status = str(report.get("quality_status") or "unchanged")
+    job.enhanced_fallback_reason = None
+    stem_names = sorted(p.stem for p in stems_dir.glob("*.wav"))
+    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in stem_names]
+    registry_persist(JOBS_DIR)
+    return {
+        "job_id": job_id,
+        "status": "ok",
+        "enhanced_applied": job.enhanced_applied,
+        "enhanced_quality_status": job.enhanced_quality_status,
+        "cleaned_stems": job.enhanced_cleaned_stems,
+        "report_url": f"/api/jobs/{job_id}/analysis/quality-report",
+    }
+
+
+@router.post("/{job_id}/stems/{stem_name}/reclean")
+async def reclean_stem(job_id: str, stem_name: str, body: EnhancedActionBody | None = None) -> dict:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    if stem_name not in STEM_NAMES:
+        raise HTTPException(status_code=422, detail=f"unsupported stem '{stem_name}'")
+    job = registry_get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    if job.status != "done":
+        raise HTTPException(status_code=409, detail="job is not ready")
+    payload = body or EnhancedActionBody()
+    job_dir = (JOBS_DIR / job_id).resolve()
+    stems_dir = (job_dir / "stems").resolve()
+    stem_path = stems_dir / f"{stem_name}.wav"
+    if not stem_path.is_file() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="stem not found")
+    found = [name for name in STEM_NAMES if (stems_dir / f"{name}.wav").is_file()]
+    try:
+        report = await asyncio.to_thread(
+            run_enhanced_cleanup,
+            job,
+            stems_dir,
+            found,
+            job_dir,
+            profile=payload.profile or "balanced",
+            forced_stems=[stem_name],
+            max_stems_to_clean=1,
+            min_improvement_frac=payload.min_improvement_frac,
+        )
+    except Exception as e:
+        logger.exception("stem reclean failed for %s/%s: %s", job_id, stem_name, e)
+        raise HTTPException(status_code=500, detail=f"stem reclean failed: {e}") from e
+    job.enhanced_applied = bool(report.get("enhanced_applied"))
+    job.enhanced_cleaned_stems = list(report.get("cleaned_stems") or [])
+    job.enhanced_quality_status = str(report.get("quality_status") or "unchanged")
+    job.enhanced_fallback_reason = None
+    stem_names = sorted(p.stem for p in stems_dir.glob("*.wav"))
+    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in stem_names]
+    registry_persist(JOBS_DIR)
+    return {
+        "job_id": job_id,
+        "stem": stem_name,
+        "status": "ok",
+        "enhanced_applied": job.enhanced_applied,
+        "enhanced_quality_status": job.enhanced_quality_status,
+        "cleaned_stems": job.enhanced_cleaned_stems,
+    }
 
 
 @router.delete("/{job_id}")

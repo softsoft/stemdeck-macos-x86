@@ -1,0 +1,59 @@
+name: Phase 9 Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cpu-smoke:
+    name: CPU Smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    env:
+      STEMDECK_DEMUCS_DEVICE: cpu
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: python -m pip install --upgrade uv
+
+      - name: Sync deps
+        run: uv sync --frozen --all-extras
+
+      - name: Run smoke tests
+        run: >
+          uv run pytest -q
+          tests/test_health_api.py
+          tests/test_config.py
+          tests/test_jobs_api.py
+          tests/test_pipeline_contract.py
+
+  js-syntax-smoke:
+    name: JS Syntax Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Check JS syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in static/js/*.js; do
+            node --check "$f"
+          done

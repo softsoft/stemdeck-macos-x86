@@ -70,9 +70,13 @@ def _adaptive_threshold(matrix: dict[str, dict[str, float]]) -> float:
     return float(max(0.22, min(0.7, max(p70, mean + 0.03))))
 
 
-def _clean_stem(name: str, y: object) -> object:
+def _clean_stem(name: str, y: object, profile: str = "balanced") -> object:
     import librosa
     import numpy as np
+
+    profile = (profile or "balanced").strip().lower()
+    if profile not in {"balanced", "strong", "conservative"}:
+        profile = "balanced"
 
     # Stem-specific cleanup strategy.
     y_h, y_p = librosa.effects.hpss(y)
@@ -84,6 +88,11 @@ def _clean_stem(name: str, y: object) -> object:
         cleaned = 0.3 * y_h + 0.7 * y
     else:
         cleaned = 0.7 * y_h + 0.3 * y
+
+    if profile == "strong":
+        cleaned = 0.55 * cleaned + 0.45 * y_h
+    elif profile == "conservative":
+        cleaned = 0.9 * y + 0.1 * cleaned
 
     # Preserve rough loudness/peak scale to avoid surprising gain jumps.
     src_peak = float(np.max(np.abs(y))) if len(y) else 0.0
@@ -119,7 +128,17 @@ def _clip_ratio(y: object) -> float:
     return float(np.mean(arr >= 0.999))
 
 
-def run_enhanced_cleanup(job: Job, stems_dir: Path, found: list[str], job_dir: Path) -> dict[str, object]:
+def run_enhanced_cleanup(
+    job: Job,
+    stems_dir: Path,
+    found: list[str],
+    job_dir: Path,
+    *,
+    profile: str = "balanced",
+    forced_stems: list[str] | None = None,
+    max_stems_to_clean: int | None = None,
+    min_improvement_frac: float | None = None,
+) -> dict[str, object]:
     analysis_dir = job_dir / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)
 
@@ -135,21 +154,32 @@ def run_enhanced_cleanup(job: Job, stems_dir: Path, found: list[str], job_dir: P
     suspicion_scores = {name: _mean_suspicion(matrix, name) for name in loaded}
     suspicious = [name for name, score in suspicion_scores.items() if score >= threshold]
     suspicious.sort(key=lambda n: suspicion_scores.get(n, 0.0), reverse=True)
-    suspicious = suspicious[:ENHANCED_MAX_STEMS_TO_CLEAN]
+    cap = ENHANCED_MAX_STEMS_TO_CLEAN if max_stems_to_clean is None else max(1, min(6, max_stems_to_clean))
+    if forced_stems:
+        allowed = {name for name in forced_stems if name in loaded}
+        suspicious = [name for name in suspicious if name in allowed]
+        if not suspicious:
+            suspicious = [name for name in loaded if name in allowed]
+    suspicious = suspicious[:cap]
+    min_improvement = (
+        ENHANCED_MIN_IMPROVEMENT_FRAC
+        if min_improvement_frac is None
+        else float(max(0.0, min(0.9, min_improvement_frac)))
+    )
 
     cleaned_stems: list[str] = []
     reverted_stems: list[str] = []
     comparisons: dict[str, dict[str, object]] = {}
     for name in suspicious:
         y, sr = loaded[name]
-        cleaned = _clean_stem(name, y)
+        cleaned = _clean_stem(name, y, profile=profile)
         baseline_score = suspicion_scores.get(name, 0.0)
         # Auto-rollback gate: cleaned version must improve mean cross-correlation.
         candidate_loaded = dict(loaded)
         candidate_loaded[name] = (cleaned, sr)
         candidate_matrix = _build_corr_matrix(candidate_loaded)
         candidate_score = _mean_suspicion(candidate_matrix, name)
-        improved = candidate_score <= baseline_score * (1.0 - ENHANCED_MIN_IMPROVEMENT_FRAC)
+        improved = candidate_score <= baseline_score * (1.0 - min_improvement)
         before_rms = _rms(y)
         after_rms = _rms(cleaned)
         before_peak = _peak(y)
@@ -181,12 +211,13 @@ def run_enhanced_cleanup(job: Job, stems_dir: Path, found: list[str], job_dir: P
     report = {
         "version": 1,
         "mode": job.mode,
+        "cleanup_profile": profile,
         "enhanced_applied": bool(cleaned_stems),
         "bleed_correlation_threshold": threshold,
         "suspicious_stems": suspicious,
         "suspicion_scores": {k: round(v, 4) for k, v in suspicion_scores.items()},
-        "max_stems_to_clean": ENHANCED_MAX_STEMS_TO_CLEAN,
-        "min_improvement_frac": ENHANCED_MIN_IMPROVEMENT_FRAC,
+        "max_stems_to_clean": cap,
+        "min_improvement_frac": min_improvement,
         "cleaned_stems": cleaned_stems,
         "reverted_stems": reverted_stems,
         "bleed_matrix": matrix,

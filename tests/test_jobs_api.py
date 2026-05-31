@@ -298,6 +298,48 @@ def test_vocals_report_happy_path(client, done_job, tmp_path):
     assert r.json()["status"] == "skipped"
 
 
+def test_reanalyze_happy_path(client, done_job, tmp_path, monkeypatch):
+    import app.api.jobs as jobs_mod
+
+    stems_dir = tmp_path / done_job.id / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    (stems_dir / "vocals.wav").write_bytes(b"RIFF")
+    (stems_dir / "drums.wav").write_bytes(b"RIFF")
+
+    def _fake_cleanup(job_obj, _stems_dir, _found, _job_dir, **kwargs):
+        analysis_dir = _job_dir / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        (analysis_dir / "quality_report.json").write_text(
+            json.dumps({"enhanced_applied": True, "cleaned_stems": ["vocals"]}) + "\n",
+            encoding="utf-8",
+        )
+        return {"enhanced_applied": True, "cleaned_stems": ["vocals"], "quality_status": "improved"}
+
+    monkeypatch.setattr(jobs_mod, "run_enhanced_cleanup", _fake_cleanup)
+    r = client.post(f"/api/jobs/{done_job.id}/analysis/reanalyze", json={"profile": "strong"})
+    assert r.status_code == 200
+    assert r.json()["enhanced_quality_status"] == "improved"
+    assert "vocals" in r.json()["cleaned_stems"]
+
+
+def test_reclean_stem_happy_path(client, done_job, tmp_path, monkeypatch):
+    import app.api.jobs as jobs_mod
+
+    stems_dir = tmp_path / done_job.id / "stems"
+    stems_dir.mkdir(parents=True, exist_ok=True)
+    (stems_dir / "vocals.wav").write_bytes(b"RIFF")
+    (stems_dir / "drums.wav").write_bytes(b"RIFF")
+
+    def _fake_cleanup(job_obj, _stems_dir, _found, _job_dir, **kwargs):
+        return {"enhanced_applied": True, "cleaned_stems": ["drums"], "quality_status": "improved"}
+
+    monkeypatch.setattr(jobs_mod, "run_enhanced_cleanup", _fake_cleanup)
+    r = client.post(f"/api/jobs/{done_job.id}/stems/drums/reclean", json={"profile": "conservative"})
+    assert r.status_code == 200
+    assert r.json()["stem"] == "drums"
+    assert "drums" in r.json()["cleaned_stems"]
+
+
 def test_quality_report_missing_returns_404(client, done_job):
     r = client.get(f"/api/jobs/{done_job.id}/analysis/quality-report")
     assert r.status_code == 404

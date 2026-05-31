@@ -18,6 +18,7 @@ function esc(s) {
 const STORAGE_KEY = "stemdeck.folders";
 const STORAGE_VERSION = 2; // bump to wipe stale seeded data
 const DELETED_JOBS_KEY = "stemdeck.deleted_jobs";
+const CLEANUP_SETTINGS_KEY = "stemdeck.cleanup.settings";
 
 let folders = [];
 let tracks = {};
@@ -26,6 +27,42 @@ let _currentTrackId = null;
 let _loadTrackToken = 0;
 let catalogView = "library";
 let catalogSearchQuery = "";
+
+const DEFAULT_CLEANUP_SETTINGS = {
+  profile: "balanced",
+  max_stems_to_clean: 2,
+  min_improvement_frac: 0.03,
+};
+
+function normalizeCleanupSettings(raw) {
+  const profile = ["balanced", "strong", "conservative"].includes(raw?.profile)
+    ? raw.profile
+    : DEFAULT_CLEANUP_SETTINGS.profile;
+  const max_stems_to_clean = Math.max(
+    1,
+    Math.min(6, Number(raw?.max_stems_to_clean ?? DEFAULT_CLEANUP_SETTINGS.max_stems_to_clean) || 2),
+  );
+  const min_improvement_frac = Math.max(
+    0,
+    Math.min(0.9, Number(raw?.min_improvement_frac ?? DEFAULT_CLEANUP_SETTINGS.min_improvement_frac) || 0.03),
+  );
+  return { profile, max_stems_to_clean, min_improvement_frac };
+}
+
+async function readCleanupSettings() {
+  try {
+    const raw = await storeGet(CLEANUP_SETTINGS_KEY, DEFAULT_CLEANUP_SETTINGS);
+    return normalizeCleanupSettings(raw);
+  } catch {
+    return { ...DEFAULT_CLEANUP_SETTINGS };
+  }
+}
+
+async function saveCleanupSettings(settings) {
+  const normalized = normalizeCleanupSettings(settings);
+  await storeSet(CLEANUP_SETTINGS_KEY, normalized);
+  return normalized;
+}
 
 // ─── Persistence ───
 
@@ -545,6 +582,38 @@ async function loadTrackIntoStudio(trackId) {
   initSections(trackId, track.sections, track.duration || 0);
 }
 
+async function runTrackReanalyze(trackId) {
+  const track = tracks[trackId];
+  if (!track) return;
+  const settings = await readCleanupSettings();
+  const btn = document.querySelector(`.cat-item[data-id="${trackId}"] .cat-reanalyze`);
+  if (btn) btn.disabled = true;
+  try {
+    const res = await fetch(`/api/jobs/${trackId}/analysis/reanalyze`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+    const stateRes = await fetch(`/api/jobs/${trackId}`);
+    if (stateRes.ok) {
+      const state = await stateRes.json();
+      tracks[trackId] = stateMetadataToTrack(state, tracks[trackId] || { id: trackId });
+      saveState();
+      if (_currentTrackId === trackId) {
+        await loadTrackIntoStudio(trackId);
+      } else {
+        render();
+      }
+    }
+  } catch (e) {
+    window.alert(`Re-analyze failed: ${e?.message || e}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 export function setCurrentTrack(trackId) {
   _currentTrackId = trackId;
   for (const el of document.querySelectorAll(".cat-item.active")) el.classList.remove("active");
@@ -762,7 +831,11 @@ function wireTrackDragAndLoad(el, trackId) {
   });
   el.addEventListener("dragend", () => endDrag(el));
   el.addEventListener("click", (e) => {
-    if (e.target.closest(".cat-del")) return;
+    if (e.target.closest(".cat-del, .cat-reanalyze")) return;
+    setCurrentTrack(trackId);
+  });
+  el.addEventListener("dblclick", (e) => {
+    if (e.target.closest(".cat-del, .cat-reanalyze")) return;
     loadTrackIntoStudio(trackId);
   });
 }
@@ -969,7 +1042,12 @@ function renderTrackItem(trackId, { inTrash = false } = {}) {
       </div>
     </div>
     <div class="cat-status${PROCESSING_STATUSES.has(track.status) ? " processing" : isUnavailable ? " unavailable" : ""}"></div>
-    ${inTrash ? "" : `<button class="cat-del" type="button" title="Move to Trash">
+    ${inTrash ? "" : `<button class="cat-reanalyze" type="button" title="Re-analyze">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <path d="M21 12a9 9 0 1 1-2.64-6.36"></path><polyline points="21 3 21 9 15 9"></polyline>
+      </svg>
+    </button>
+    <button class="cat-del" type="button" title="Move to Trash">
       <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <polyline points="3 6 5 6 21 6"></polyline>
         <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
@@ -977,10 +1055,15 @@ function renderTrackItem(trackId, { inTrash = false } = {}) {
     </button>`}
   `;
   el.querySelector(".cat-del")?.setAttribute("aria-label", `Move ${track.title ?? "track"} to Trash`);
+  el.querySelector(".cat-reanalyze")?.setAttribute("aria-label", `Re-analyze ${track.title ?? "track"}`);
 
   el.querySelector(".cat-del")?.addEventListener("click", (e) => {
     e.stopPropagation();
     moveTrackToTrash(trackId);
+  });
+  el.querySelector(".cat-reanalyze")?.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    await runTrackReanalyze(trackId);
   });
 
   wireTrackDragAndLoad(el, trackId);
@@ -1555,6 +1638,9 @@ async function loadRuntimeSettings() {
   const modelEl = document.getElementById("settingsModel");
   const deviceEl = document.getElementById("settingsDevice");
   const ffmpegEl = document.getElementById("settingsFfmpeg");
+  const cleanupProfileEl = document.getElementById("settingsCleanupProfile");
+  const maxStemsEl = document.getElementById("settingsMaxStems");
+  const minImproveEl = document.getElementById("settingsMinImprove");
   try {
     const res = await fetch("/api/health", { cache: "no-store" });
     if (!res.ok) return;
@@ -1566,6 +1652,10 @@ async function loadRuntimeSettings() {
   } catch (e) {
     console.warn("[catalog] settings fetch failed:", e);
   }
+  const cleanup = await readCleanupSettings();
+  if (cleanupProfileEl) cleanupProfileEl.value = cleanup.profile;
+  if (maxStemsEl) maxStemsEl.value = String(cleanup.max_stems_to_clean);
+  if (minImproveEl) minImproveEl.value = String(cleanup.min_improvement_frac);
 }
 
 function wireSettingsDialog() {
@@ -1581,6 +1671,19 @@ function wireSettingsDialog() {
   const hide = () => dialog.classList.add("hidden");
 
   btn.addEventListener("click", open);
+  const profileEl = document.getElementById("settingsCleanupProfile");
+  const maxStemsEl = document.getElementById("settingsMaxStems");
+  const minImproveEl = document.getElementById("settingsMinImprove");
+  const onChange = async () => {
+    await saveCleanupSettings({
+      profile: profileEl?.value || "balanced",
+      max_stems_to_clean: Number(maxStemsEl?.value || 2),
+      min_improvement_frac: Number(minImproveEl?.value || 0.03),
+    });
+  };
+  profileEl?.addEventListener("change", onChange);
+  maxStemsEl?.addEventListener("change", onChange);
+  minImproveEl?.addEventListener("change", onChange);
   close?.addEventListener("click", hide);
   dialog.addEventListener("mousedown", (e) => {
     if (e.target === dialog) hide();

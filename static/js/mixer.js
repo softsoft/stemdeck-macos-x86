@@ -7,17 +7,68 @@ import {
 } from "./state.js";
 import { storeGet, storeSetDebounced } from "./utils.js";
 
-let _vocalsContextMenuEl = null;
+let _stemContextMenuEl = null;
+let _vocalsGlobalMenuBound = false;
+let _vocalsProgressTimer = null;
+const CLEANUP_SETTINGS_KEY = "stemdeck.cleanup.settings";
+
+function setVocalsProgress(title, pct, visible = true) {
+  const wrap = document.getElementById("vocals-progress");
+  const titleEl = document.getElementById("vocals-progress-title");
+  const fillEl = document.getElementById("vocals-progress-fill");
+  if (!wrap || !titleEl || !fillEl) return;
+  if (visible) wrap.classList.remove("hidden");
+  else wrap.classList.add("hidden");
+  titleEl.textContent = title;
+  fillEl.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+}
+
+function startVocalsProgress() {
+  if (_vocalsProgressTimer) window.clearInterval(_vocalsProgressTimer);
+  let pct = 8;
+  setVocalsProgress("Vocals re-analyze: running...", pct, true);
+  _vocalsProgressTimer = window.setInterval(() => {
+    pct = Math.min(92, pct + (pct < 60 ? 7 : 3));
+    setVocalsProgress("Vocals re-analyze: running...", pct, true);
+  }, 300);
+}
+
+function stopVocalsProgress(ok, message) {
+  if (_vocalsProgressTimer) {
+    window.clearInterval(_vocalsProgressTimer);
+    _vocalsProgressTimer = null;
+  }
+  setVocalsProgress(message, ok ? 100 : 100, true);
+  window.setTimeout(() => setVocalsProgress(message, 100, false), 1400);
+}
 
 function closeVocalsContextMenu() {
-  if (_vocalsContextMenuEl) {
-    _vocalsContextMenuEl.remove();
-    _vocalsContextMenuEl = null;
+  if (_stemContextMenuEl) {
+    _stemContextMenuEl.remove();
+    _stemContextMenuEl = null;
+  }
+}
+
+async function readCleanupSettings() {
+  try {
+    const raw = await storeGet(CLEANUP_SETTINGS_KEY, {
+      profile: "balanced",
+      max_stems_to_clean: 2,
+      min_improvement_frac: 0.03,
+    });
+    return {
+      profile: ["balanced", "strong", "conservative"].includes(raw?.profile) ? raw.profile : "balanced",
+      max_stems_to_clean: Math.max(1, Math.min(6, Number(raw?.max_stems_to_clean) || 2)),
+      min_improvement_frac: Math.max(0, Math.min(0.9, Number(raw?.min_improvement_frac) || 0.03)),
+    };
+  } catch {
+    return { profile: "balanced", max_stems_to_clean: 2, min_improvement_frac: 0.03 };
   }
 }
 
 async function runVocalsReanalyze() {
   if (!currentJobId) return;
+  startVocalsProgress();
   try {
     const res = await fetch(`/api/jobs/${currentJobId}/vocals/reanalyze`, { method: "POST" });
     const body = await res.json().catch(() => ({}));
@@ -25,19 +76,49 @@ async function runVocalsReanalyze() {
     window.dispatchEvent(
       new CustomEvent("stemdeck:refresh-track", { detail: { trackId: currentJobId } }),
     );
+    stopVocalsProgress(true, "Vocals re-analyze: completed");
   } catch (err) {
     console.error("[mixer] vocals re-analyze failed:", err);
+    stopVocalsProgress(false, "Vocals re-analyze: failed");
     window.alert(`Vocals re-analyze failed: ${err?.message || err}`);
   }
 }
 
-function openVocalsContextMenu(x, y) {
+async function runStemReclean(stemName) {
+  if (!currentJobId || !STEM_NAMES.includes(stemName)) return;
+  const settings = await readCleanupSettings();
+  startVocalsProgress();
+  setVocalsProgress(`Re-clean ${stemName}: running...`, 8, true);
+  try {
+    const res = await fetch(`/api/jobs/${currentJobId}/stems/${stemName}/reclean`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+    window.dispatchEvent(
+      new CustomEvent("stemdeck:refresh-track", { detail: { trackId: currentJobId } }),
+    );
+    stopVocalsProgress(true, `Re-clean ${stemName}: completed`);
+  } catch (err) {
+    console.error("[mixer] stem reclean failed:", err);
+    stopVocalsProgress(false, `Re-clean ${stemName}: failed`);
+    window.alert(`Stem re-clean failed: ${err?.message || err}`);
+  }
+}
+
+function openVocalsContextMenu(x, y, stemName = "vocals") {
   closeVocalsContextMenu();
   const menu = document.createElement("div");
   menu.className = "stem-context-menu";
+  const vocalsAction = stemName === "vocals"
+    ? '<button type="button" class="stem-context-item" data-action="reanalyze">Enhanced Re-analyze Vocals</button>'
+    : "";
   menu.innerHTML = `
+    <button type="button" class="stem-context-item" data-action="reclean">Re-clean this stem</button>
+    ${vocalsAction}
     <button type="button" class="stem-context-item" data-action="reload">Reload</button>
-    <button type="button" class="stem-context-item" data-action="reanalyze">Enchanced Re-analyze Vocals</button>
   `;
   document.body.appendChild(menu);
 
@@ -48,21 +129,35 @@ function openVocalsContextMenu(x, y) {
   const top = Math.max(8, Math.min(y, vh - rect.height - 8));
   menu.style.left = `${left}px`;
   menu.style.top = `${top}px`;
-  _vocalsContextMenuEl = menu;
+  _stemContextMenuEl = menu;
 
-  menu.addEventListener("click", async (e) => {
-    const item = e.target.closest(".stem-context-item");
-    if (!item) return;
-    const action = item.dataset.action;
+  const recleanBtn = menu.querySelector('[data-action="reclean"]');
+  const reloadBtn = menu.querySelector('[data-action="reload"]');
+  const reanalyzeBtn = menu.querySelector('[data-action="reanalyze"]');
+
+  recleanBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
     closeVocalsContextMenu();
-    if (action === "reload") {
-      window.location.reload();
-      return;
-    }
-    if (action === "reanalyze") {
-      await runVocalsReanalyze();
-    }
+    await runStemReclean(stemName);
   });
+
+  reloadBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeVocalsContextMenu();
+    window.location.reload();
+  });
+
+  reanalyzeBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeVocalsContextMenu();
+    await runVocalsReanalyze();
+  });
+
+  // Click inside menu should not trigger outer "close" handler first.
+  menu.addEventListener("click", (e) => e.stopPropagation());
 
   window.setTimeout(() => {
     document.addEventListener("click", closeVocalsContextMenu, { once: true });
@@ -552,13 +647,48 @@ export function wireStemListControls() {
     btn.addEventListener("click", () => soloOnlyStem(btn.dataset.stem));
   }
 
-  const vocalsRow = stemListEl.querySelector('span[data-stem="vocals"]');
-  if (vocalsRow && vocalsRow.dataset.reanalyzeBound !== "1") {
-    vocalsRow.dataset.reanalyzeBound = "1";
-    vocalsRow.title = "Right-click: Reload / Re-analyze vocals";
-    vocalsRow.addEventListener("contextmenu", (e) => {
+  if (stemListEl.dataset.vocalsMenuBound !== "1") {
+    stemListEl.dataset.vocalsMenuBound = "1";
+    stemListEl.addEventListener("contextmenu", (e) => {
+      const row = e.target.closest("span[data-stem]");
+      if (!row || !stemListEl.contains(row)) return;
+      const stemName = row.dataset.stem;
+      if (!stemName || stemName === "original") return;
       e.preventDefault();
-      openVocalsContextMenu(e.clientX, e.clientY);
+      openVocalsContextMenu(e.clientX, e.clientY, stemName);
+    });
+  }
+  const vocalsRow = stemListEl.querySelector('span[data-stem="vocals"]');
+  if (vocalsRow) {
+    vocalsRow.title = "Right-click: Reload / Re-analyze vocals";
+  }
+  if (mixerEl && mixerEl.dataset.vocalsMenuBound !== "1") {
+    mixerEl.dataset.vocalsMenuBound = "1";
+    mixerEl.addEventListener("contextmenu", (e) => {
+      const row = e.target.closest(".lane-header[data-stem]");
+      if (!row || !mixerEl.contains(row)) return;
+      const stemName = row.dataset.stem;
+      if (!stemName || stemName === "original") return;
+      e.preventDefault();
+      openVocalsContextMenu(e.clientX, e.clientY, stemName);
+    });
+  }
+
+  if (!_vocalsGlobalMenuBound) {
+    _vocalsGlobalMenuBound = true;
+    document.addEventListener("contextmenu", (e) => {
+      const target = e.target instanceof Element ? e.target : null;
+      if (!target) return;
+      const insideStemPanel = target.closest(".stem-list");
+      const insideMixer = target.closest("#mixer");
+      if (!insideStemPanel && !insideMixer) return;
+      const stemEl = target.closest("[data-stem]");
+      if (!stemEl) return;
+      const stemName = stemEl.getAttribute("data-stem");
+      if (!stemName || stemName === "original") return;
+      e.preventDefault();
+      e.stopPropagation();
+      openVocalsContextMenu(e.clientX, e.clientY, stemName);
     });
   }
 }
