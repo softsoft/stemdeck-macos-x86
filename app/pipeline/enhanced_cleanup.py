@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.core.config import ENHANCED_MAX_STEMS_TO_CLEAN, ENHANCED_MIN_IMPROVEMENT_FRAC
 from app.core.models import Job
+from app.core.stem_variants import store_variant_audio
 
 logger = logging.getLogger("stemdeck.enhanced")
 
@@ -15,12 +16,6 @@ def _load_audio(path: Path) -> tuple[object, int]:
 
     y, sr = librosa.load(path, sr=44100, mono=True)
     return y, sr
-
-
-def _save_audio(path: Path, y: object, sr: int) -> None:
-    import soundfile as sf
-
-    sf.write(path, y, sr, subtype="PCM_16")
 
 
 def _corr_abs(a: object, b: object) -> float:
@@ -204,8 +199,15 @@ def run_enhanced_cleanup(
         if not improved:
             reverted_stems.append(name)
             continue
-        out = stems_dir / f"{name}_clean.wav"
-        _save_audio(out, cleaned, sr)
+        store_variant_audio(
+            stems_dir,
+            name,
+            category=f"{name}_clean",
+            audio=cleaned,
+            sr=sr,
+            source="enhanced_cleanup",
+            auto_activate=True,
+        )
         cleaned_stems.append(name)
 
     report = {

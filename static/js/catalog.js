@@ -1569,6 +1569,7 @@ function wireWidgets() {
 // ─── Init ───
 
 const FALLBACK_VERSION = "0.1.0";
+const MOD_VERSION = "0.2.0-alpha.2";
 let currentVersion = FALLBACK_VERSION;
 const REPO_URL = "https://github.com/stemdeckapp/stemdeck";
 const RELEASES_URL = "https://github.com/stemdeckapp/stemdeck/releases";
@@ -1652,15 +1653,17 @@ function wireAboutDialog() {
 
 async function loadRuntimeSettings() {
   const versionEl = document.getElementById("settingsVersion");
+  const modVersionEl = document.getElementById("settingsModVersion");
   const modelEl = document.getElementById("settingsModel");
   const deviceEl = document.getElementById("settingsDevice");
   const ffmpegEl = document.getElementById("settingsFfmpeg");
   const cleanupProfileEl = document.getElementById("settingsCleanupProfile");
   const maxStemsEl = document.getElementById("settingsMaxStems");
   const minImproveEl = document.getElementById("settingsMinImprove");
+  if (modVersionEl) modVersionEl.textContent = MOD_VERSION;
   try {
     const res = await fetch("/api/health", { cache: "no-store" });
-    if (!res.ok) return;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (versionEl) versionEl.textContent = `v${normalizeVersion(data.version)}`;
     if (modelEl) modelEl.textContent = data.demucs_model || "—";

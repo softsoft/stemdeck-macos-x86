@@ -4,6 +4,8 @@ import json
 import logging
 from pathlib import Path
 
+from app.core.stem_variants import store_variant_audio
+
 logger = logging.getLogger("stemdeck.vocals")
 
 
@@ -34,7 +36,6 @@ def _rms(y: object) -> float:
 
 def run_vocals_reanalyze(job_id: str, job_dir: Path) -> dict[str, object]:
     import numpy as np
-    import soundfile as sf
     import librosa
 
     stems_dir = job_dir / "stems"
@@ -72,11 +73,25 @@ def run_vocals_reanalyze(job_id: str, job_dir: Path) -> dict[str, object]:
 
     created: list[str] = []
     if should_create:
-        lead_path = stems_dir / "lead_vocal.wav"
-        backing_path = stems_dir / "backing_vocals.wav"
-        sf.write(lead_path, lead, sr, subtype="PCM_16")
-        sf.write(backing_path, backing, sr, subtype="PCM_16")
-        created = ["lead_vocal", "backing_vocals"]
+        lead_entry = store_variant_audio(
+            stems_dir,
+            "vocals",
+            category="lead_vocal",
+            audio=lead,
+            sr=sr,
+            source="vocals_reanalyze",
+            auto_activate=True,
+        )
+        backing_entry = store_variant_audio(
+            stems_dir,
+            "vocals",
+            category="backing_vocals",
+            audio=backing,
+            sr=sr,
+            source="vocals_reanalyze",
+            auto_activate=False,
+        )
+        created = [str(lead_entry.get("name")), str(backing_entry.get("name"))]
 
     analysis_dir = job_dir / "analysis"
     analysis_dir.mkdir(parents=True, exist_ok=True)

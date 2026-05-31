@@ -30,6 +30,7 @@ from app.core.registry import get_proc as registry_get_proc
 from app.core.registry import persist as registry_persist
 from app.core.registry import register_if_capacity as registry_register_if_capacity
 from app.core.registry import remove as registry_remove
+from app.core.stem_variants import cleanup_variant_cache, compose_variant_mix, list_variants, set_active_variant
 from app.pipeline import run_local_pipeline, run_pipeline
 from app.pipeline.download import InvalidYouTubeURL, validate_youtube_url
 from app.pipeline.enhanced_cleanup import run_enhanced_cleanup
@@ -346,8 +347,7 @@ async def reanalyze_vocals(job_id: str) -> dict:
     job.vocals_split_tracks = created_tracks
 
     stems_dir = job_dir / "stems"
-    stem_names = sorted(p.stem for p in stems_dir.glob("*.wav"))
-    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in stem_names]
+    _refresh_job_stems_from_dir(job, stems_dir)
     registry_persist(JOBS_DIR)
     return {
         "job_id": job_id,
@@ -430,6 +430,36 @@ class EnhancedActionBody(BaseModel):
         return normalized
 
 
+class VariantActivateBody(BaseModel):
+    variant: str
+
+    @field_validator("variant")
+    @classmethod
+    def _validate_variant(cls, value: str) -> str:
+        v = (value or "").strip()
+        if not v:
+            raise ValueError("variant is required")
+        return v
+
+
+class VariantComposeBody(BaseModel):
+    variants: list[str]
+    include_original: bool = False
+
+    @field_validator("variants")
+    @classmethod
+    def _validate_variants(cls, value: list[str]) -> list[str]:
+        out = [str(v).strip() for v in (value or []) if str(v).strip()]
+        if not out:
+            raise ValueError("at least one variant is required")
+        return out
+
+
+def _refresh_job_stems_from_dir(job: Job, stems_dir: Path) -> None:
+    stem_names = sorted(p.stem for p in stems_dir.glob("*.wav"))
+    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in stem_names]
+
+
 @router.patch("/{job_id}/sections")
 def update_sections(job_id: str, body: SectionsBody) -> dict:
     """Save named timeline sections (intro, verse, chorus, etc.) for a done job."""
@@ -502,8 +532,7 @@ async def rerun_enhanced_analysis(job_id: str, body: EnhancedActionBody | None =
     job.enhanced_cleaned_stems = list(report.get("cleaned_stems") or [])
     job.enhanced_quality_status = str(report.get("quality_status") or "unchanged")
     job.enhanced_fallback_reason = None
-    stem_names = sorted(p.stem for p in stems_dir.glob("*.wav"))
-    job.stems = [{"name": name, "url": f"/api/jobs/{job.id}/stems/{name}.wav"} for name in stem_names]
+    _refresh_job_stems_from_dir(job, stems_dir)
     registry_persist(JOBS_DIR)
     return {
         "job_id": job_id,
@@ -563,6 +592,97 @@ async def reclean_stem(job_id: str, stem_name: str, body: EnhancedActionBody | N
         "enhanced_quality_status": job.enhanced_quality_status,
         "cleaned_stems": job.enhanced_cleaned_stems,
     }
+
+
+@router.get("/{job_id}/stems/{stem_name}/variants")
+def get_stem_variants(job_id: str, stem_name: str) -> dict:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    if stem_name not in STEM_NAMES:
+        raise HTTPException(status_code=422, detail=f"unsupported stem '{stem_name}'")
+    job = registry_get(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(status_code=404, detail="job not ready")
+    stems_dir = (JOBS_DIR / job_id / "stems").resolve()
+    if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="stems not found")
+    if not (stems_dir / f"{stem_name}.wav").is_file():
+        raise HTTPException(status_code=404, detail="stem not found")
+    return list_variants(stems_dir, stem_name)
+
+
+@router.post("/{job_id}/stems/{stem_name}/variants/activate")
+def activate_stem_variant(job_id: str, stem_name: str, body: VariantActivateBody) -> dict:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    if stem_name not in STEM_NAMES:
+        raise HTTPException(status_code=422, detail=f"unsupported stem '{stem_name}'")
+    job = registry_get(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(status_code=404, detail="job not ready")
+    stems_dir = (JOBS_DIR / job_id / "stems").resolve()
+    if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="stems not found")
+    if not (stems_dir / f"{stem_name}.wav").is_file():
+        raise HTTPException(status_code=404, detail="stem not found")
+    try:
+        status = set_active_variant(stems_dir, stem_name, body.variant)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    _refresh_job_stems_from_dir(job, stems_dir)
+    registry_persist(JOBS_DIR)
+    return {"job_id": job_id, **status}
+
+
+@router.post("/{job_id}/stems/{stem_name}/variants/cleanup")
+def cleanup_stem_variants(job_id: str, stem_name: str) -> dict:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    if stem_name not in STEM_NAMES:
+        raise HTTPException(status_code=422, detail=f"unsupported stem '{stem_name}'")
+    job = registry_get(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(status_code=404, detail="job not ready")
+    stems_dir = (JOBS_DIR / job_id / "stems").resolve()
+    if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="stems not found")
+    if not (stems_dir / f"{stem_name}.wav").is_file():
+        raise HTTPException(status_code=404, detail="stem not found")
+    status = cleanup_variant_cache(stems_dir, stem_name, keep_active=True)
+    _refresh_job_stems_from_dir(job, stems_dir)
+    registry_persist(JOBS_DIR)
+    return {"job_id": job_id, **status}
+
+
+@router.post("/{job_id}/stems/{stem_name}/variants/compose")
+def compose_stem_variants(job_id: str, stem_name: str, body: VariantComposeBody) -> dict:
+    if not JOB_ID_RE.match(job_id):
+        raise HTTPException(status_code=404, detail="job not found")
+    if stem_name not in STEM_NAMES:
+        raise HTTPException(status_code=422, detail=f"unsupported stem '{stem_name}'")
+    job = registry_get(job_id)
+    if job is None or job.status != "done":
+        raise HTTPException(status_code=404, detail="job not ready")
+    stems_dir = (JOBS_DIR / job_id / "stems").resolve()
+    if not stems_dir.is_dir() or not stems_dir.is_relative_to(JOBS_DIR.resolve()):
+        raise HTTPException(status_code=404, detail="stems not found")
+    if not (stems_dir / f"{stem_name}.wav").is_file():
+        raise HTTPException(status_code=404, detail="stem not found")
+    try:
+        created = compose_variant_mix(
+            stems_dir,
+            stem_name,
+            variant_names=body.variants,
+            include_original=bool(body.include_original),
+            source="ui_compose",
+            auto_activate=True,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    _refresh_job_stems_from_dir(job, stems_dir)
+    registry_persist(JOBS_DIR)
+    status = list_variants(stems_dir, stem_name)
+    return {"job_id": job_id, "created": created, **status}
 
 
 @router.delete("/{job_id}")

@@ -15,6 +15,7 @@ from starlette.background import BackgroundTask
 
 from app.core.config import JOB_ID_RE, JOBS_DIR, STEM_NAMES, TIMEOUT_FFMPEG, ffmpeg_executable
 from app.core.registry import get as registry_get
+from app.core.stem_variants import resolve_stem_audio_path
 
 logger = logging.getLogger("stemdeck.api")
 
@@ -40,7 +41,8 @@ def _validate_stem_path(job_id: str, name: str):
     allowed_names.add("mix")  # virtual alias to selected mix output
     if name not in allowed_names:
         raise HTTPException(status_code=404, detail="unknown stem")
-    path = (JOBS_DIR / job_id / "stems" / f"{name}.wav").resolve()
+    stems_dir = (JOBS_DIR / job_id / "stems").resolve()
+    path = resolve_stem_audio_path(stems_dir, name) if name in STEM_NAMES else (stems_dir / f"{name}.wav").resolve()
     if not path.is_file() or not path.is_relative_to(JOBS_DIR.resolve()):
         raise HTTPException(status_code=404, detail="stem not found")
     return path
@@ -247,7 +249,7 @@ async def get_all_stems_zip(
 
     sources: list[tuple[str, Path]] = []
     for name in wanted:
-        p = (stems_dir / f"{name}.wav").resolve()
+        p = resolve_stem_audio_path(stems_dir, name).resolve()
         if p.is_file() and p.is_relative_to(jobs_root):
             sources.append((name, p))
     if not sources:

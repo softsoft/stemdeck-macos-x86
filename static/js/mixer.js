@@ -10,6 +10,7 @@ import { storeGet, storeSetDebounced } from "./utils.js";
 let _stemContextMenuEl = null;
 let _vocalsGlobalMenuBound = false;
 let _vocalsProgressTimer = null;
+let _variantsPanelEl = null;
 const CLEANUP_SETTINGS_KEY = "stemdeck.cleanup.settings";
 
 function setVocalsProgress(title, pct, visible = true) {
@@ -108,6 +109,161 @@ async function runStemReclean(stemName) {
   }
 }
 
+async function fetchStemVariants(stemName) {
+  if (!currentJobId || !STEM_NAMES.includes(stemName)) return null;
+  const res = await fetch(`/api/jobs/${currentJobId}/stems/${stemName}/variants`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+async function activateStemVariant(stemName, variant) {
+  if (!currentJobId || !STEM_NAMES.includes(stemName)) return;
+  const res = await fetch(`/api/jobs/${currentJobId}/stems/${stemName}/variants/activate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ variant }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+  window.dispatchEvent(new CustomEvent("stemdeck:refresh-track", { detail: { trackId: currentJobId } }));
+}
+
+async function cleanupStemVariants(stemName) {
+  if (!currentJobId || !STEM_NAMES.includes(stemName)) return;
+  const res = await fetch(`/api/jobs/${currentJobId}/stems/${stemName}/variants/cleanup`, {
+    method: "POST",
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+  return body;
+}
+
+async function composeStemVariants(stemName, variants, includeOriginal = false) {
+  if (!currentJobId || !STEM_NAMES.includes(stemName)) return null;
+  const res = await fetch(`/api/jobs/${currentJobId}/stems/${stemName}/variants/compose`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ variants, include_original: includeOriginal }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.detail || `HTTP ${res.status}`);
+  return body;
+}
+
+function closeVariantsPanel() {
+  if (_variantsPanelEl) {
+    _variantsPanelEl.remove();
+    _variantsPanelEl = null;
+  }
+}
+
+function openVariantsPanel(stemName) {
+  closeVariantsPanel();
+  const panel = document.createElement("div");
+  panel.style.position = "fixed";
+  panel.style.right = "16px";
+  panel.style.bottom = "16px";
+  panel.style.zIndex = "10020";
+  panel.style.width = "340px";
+  panel.style.maxHeight = "56vh";
+  panel.style.overflow = "auto";
+  panel.style.border = "1px solid rgba(255,255,255,.14)";
+  panel.style.background = "#121826";
+  panel.style.borderRadius = "8px";
+  panel.style.boxShadow = "0 16px 44px rgba(0,0,0,.45)";
+  panel.style.padding = "10px";
+  const titleStem = String(stemName || "stem").replace(/_/g, " ");
+  const titleStemPretty = titleStem.charAt(0).toUpperCase() + titleStem.slice(1);
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <b style="font-size:12px;">${titleStemPretty} Variants</b>
+      <button type="button" data-action="close" class="stem-context-item" style="padding:4px 8px;">Close</button>
+    </div>
+    <div data-role="status" style="font-size:11px;opacity:.8;margin-bottom:8px;">Loading…</div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:12px;margin-bottom:8px;">
+      <input type="checkbox" data-role="include-original" />
+      Include original ${titleStem}
+    </label>
+    <div data-role="list" style="display:grid;gap:6px;margin-bottom:10px;"></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button type="button" data-action="activate-original" class="stem-context-item">Activate original</button>
+      <button type="button" data-action="compose" class="stem-context-item">Apply selected as mix</button>
+      <button type="button" data-action="refresh" class="stem-context-item">Refresh</button>
+    </div>
+  `;
+  document.body.appendChild(panel);
+  _variantsPanelEl = panel;
+
+  const statusEl = panel.querySelector('[data-role="status"]');
+  const listEl = panel.querySelector('[data-role="list"]');
+  const includeOriginalEl = panel.querySelector('[data-role="include-original"]');
+  const closeBtn = panel.querySelector('[data-action="close"]');
+  const actOrigBtn = panel.querySelector('[data-action="activate-original"]');
+  const composeBtn = panel.querySelector('[data-action="compose"]');
+  const refreshBtn = panel.querySelector('[data-action="refresh"]');
+
+  const load = async () => {
+    try {
+      statusEl.textContent = "Loading variants…";
+      const data = await fetchStemVariants(stemName);
+      const active = String(data?.active || "original");
+      const variants = Array.isArray(data?.variants) ? data.variants : [];
+      listEl.innerHTML = "";
+      if (!variants.length) {
+        statusEl.textContent = "No variants yet";
+        return;
+      }
+      statusEl.textContent = `Active: ${active}`;
+      for (const v of variants) {
+        const name = String(v?.name || "");
+        const category = String(v?.category || "");
+        if (!name) continue;
+        const row = document.createElement("label");
+        row.style.display = "flex";
+        row.style.alignItems = "center";
+        row.style.gap = "8px";
+        row.style.fontSize = "12px";
+        row.innerHTML = `
+          <input type="checkbox" data-name="${name}" />
+          <span>${category}: ${name}${active === name ? " (active)" : ""}</span>
+        `;
+        listEl.appendChild(row);
+      }
+    } catch (e) {
+      statusEl.textContent = `Load failed: ${e?.message || e}`;
+    }
+  };
+
+  closeBtn?.addEventListener("click", closeVariantsPanel);
+  actOrigBtn?.addEventListener("click", async () => {
+    try {
+      await activateStemVariant(stemName, "original");
+      await load();
+    } catch (e) {
+      window.alert(`Activate original failed: ${e?.message || e}`);
+    }
+  });
+  composeBtn?.addEventListener("click", async () => {
+    const picks = Array.from(listEl.querySelectorAll('input[type="checkbox"][data-name]:checked'))
+      .map((el) => el.getAttribute("data-name"))
+      .filter(Boolean);
+    if (!picks.length && !includeOriginalEl?.checked) {
+      window.alert("Select at least one variant or include original");
+      return;
+    }
+    try {
+      statusEl.textContent = "Applying mix…";
+      await composeStemVariants(stemName, picks, Boolean(includeOriginalEl?.checked));
+      window.dispatchEvent(new CustomEvent("stemdeck:refresh-track", { detail: { trackId: currentJobId } }));
+      await load();
+    } catch (e) {
+      window.alert(`Compose failed: ${e?.message || e}`);
+    }
+  });
+  refreshBtn?.addEventListener("click", load);
+  load();
+}
+
 function openVocalsContextMenu(x, y, stemName = "vocals") {
   closeVocalsContextMenu();
   const menu = document.createElement("div");
@@ -118,6 +274,13 @@ function openVocalsContextMenu(x, y, stemName = "vocals") {
   menu.innerHTML = `
     <button type="button" class="stem-context-item" data-action="reclean">Re-clean this stem</button>
     ${vocalsAction}
+    <div class="stem-context-sep" style="height:1px;background:rgba(255,255,255,.08);margin:6px 0;"></div>
+    <div class="stem-context-variants" data-variants-wrap>
+      <button type="button" class="stem-context-item" data-action="variant-original">Use original</button>
+      <div class="stem-context-hint" data-variants-hint style="padding:6px 10px;font-size:11px;opacity:.75;">Loading variants…</div>
+    <button type="button" class="stem-context-item" data-action="variant-cleanup">Clean variant cache</button>
+      <button type="button" class="stem-context-item" data-action="variants-panel">Open floating variants panel</button>
+    </div>
     <button type="button" class="stem-context-item" data-action="reload">Reload</button>
   `;
   document.body.appendChild(menu);
@@ -134,6 +297,11 @@ function openVocalsContextMenu(x, y, stemName = "vocals") {
   const recleanBtn = menu.querySelector('[data-action="reclean"]');
   const reloadBtn = menu.querySelector('[data-action="reload"]');
   const reanalyzeBtn = menu.querySelector('[data-action="reanalyze"]');
+  const variantOriginalBtn = menu.querySelector('[data-action="variant-original"]');
+  const variantCleanupBtn = menu.querySelector('[data-action="variant-cleanup"]');
+  const variantWrap = menu.querySelector("[data-variants-wrap]");
+  const variantHint = menu.querySelector("[data-variants-hint]");
+  const variantsPanelBtn = menu.querySelector('[data-action="variants-panel"]');
 
   recleanBtn?.addEventListener("click", async (e) => {
     e.preventDefault();
@@ -156,12 +324,86 @@ function openVocalsContextMenu(x, y, stemName = "vocals") {
     await runVocalsReanalyze();
   });
 
+  variantOriginalBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeVocalsContextMenu();
+    try {
+      await activateStemVariant(stemName, "original");
+    } catch (err) {
+      window.alert(`Switch variant failed: ${err?.message || err}`);
+    }
+  });
+
+  variantCleanupBtn?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeVocalsContextMenu();
+    try {
+      const body = await cleanupStemVariants(stemName);
+      window.alert(`Variant cache cleaned: removed ${body?.removed ?? 0} file(s)`);
+    } catch (err) {
+      window.alert(`Cleanup failed: ${err?.message || err}`);
+    }
+  });
+  variantsPanelBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeVocalsContextMenu();
+    openVariantsPanel(stemName);
+  });
+
   // Click inside menu should not trigger outer "close" handler first.
   menu.addEventListener("click", (e) => e.stopPropagation());
 
   window.setTimeout(() => {
     document.addEventListener("click", closeVocalsContextMenu, { once: true });
   }, 0);
+
+  fetchStemVariants(stemName)
+    .then((data) => {
+      if (!_stemContextMenuEl || _stemContextMenuEl !== menu) return;
+      const variants = Array.isArray(data?.variants) ? data.variants : [];
+      const active = String(data?.active || "original");
+      if (variantOriginalBtn) {
+        variantOriginalBtn.textContent = active === "original" ? "Use original (active)" : "Use original";
+      }
+      if (!variantWrap) return;
+      for (const old of variantWrap.querySelectorAll("[data-variant-item]")) old.remove();
+      if (!variants.length) {
+        if (variantHint) variantHint.textContent = "No variants yet";
+        return;
+      }
+      if (variantHint) variantHint.textContent = "Select active variant:";
+      const ordered = [...variants].reverse();
+      for (const v of ordered) {
+        const name = String(v?.name || "");
+        if (!name) continue;
+        const category = String(v?.category || "");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "stem-context-item";
+        btn.setAttribute("data-variant-item", "1");
+        btn.textContent = active === name
+          ? `${category || "variant"}: ${name} (active)`
+          : `${category || "variant"}: ${name}`;
+        btn.addEventListener("click", async (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          closeVocalsContextMenu();
+          try {
+            await activateStemVariant(stemName, name);
+          } catch (err) {
+            window.alert(`Switch variant failed: ${err?.message || err}`);
+          }
+        });
+        if (variantCleanupBtn) variantWrap.insertBefore(btn, variantCleanupBtn);
+        else variantWrap.appendChild(btn);
+      }
+    })
+    .catch(() => {
+      if (variantHint) variantHint.textContent = "Variants unavailable";
+    });
 }
 
 function defaultMixerEntry() {
