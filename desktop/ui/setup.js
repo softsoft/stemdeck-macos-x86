@@ -217,7 +217,19 @@ async function runSetup() {
       minDelay(350),
     ]);
 
-    if (runtime.pythonReady && runtime.ffmpegReady && runtime.torchDevice) {
+    const runtimeStatus = await invoke("runtime_pack_status");
+    const expectedVersion = runtimeStatus.manifest?.version;
+    const installedVersion = runtimeStatus.installedVersion;
+    const versionMismatch = expectedVersion && installedVersion && expectedVersion !== installedVersion;
+    const archiveNewerThanInstalled = Boolean(
+      runtimeStatus.archiveReady
+      && runtimeStatus.archiveModifiedAt
+      && runtimeStatus.installedAt
+      && Number(runtimeStatus.archiveModifiedAt) > Number(runtimeStatus.installedAt)
+    );
+    const needsRuntimeRefresh = !runtime.pythonReady || versionMismatch || archiveNewerThanInstalled;
+
+    if (!needsRuntimeRefresh && runtime.ffmpegReady && runtime.torchDevice) {
       for (const step of steps) {
         step.classList.remove("active", "error");
         if (step.dataset.step === "backend") {
@@ -235,14 +247,11 @@ async function runSetup() {
       return;
     }
 
-    const runtimeStatus = await invoke("runtime_pack_status");
-    const expectedVersion = runtimeStatus.manifest?.version;
-    const installedVersion = runtimeStatus.installedVersion;
-    const versionMismatch = expectedVersion && installedVersion && expectedVersion !== installedVersion;
-
-    if (!runtime.pythonReady || versionMismatch) {
+    if (needsRuntimeRefresh) {
       if (versionMismatch) {
         setStatus(`Updating runtime from ${installedVersion} to ${expectedVersion}...`);
+      } else if (archiveNewerThanInstalled) {
+        setStatus("Applying newer local runtime archive...");
       }
       await invoke("ensure_workspace");
       await installRuntimePack(runtime.appRoot);

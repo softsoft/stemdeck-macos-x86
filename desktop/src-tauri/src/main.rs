@@ -95,6 +95,8 @@ struct RuntimePackStatus {
     archive_path: Option<String>,
     archive_ready: bool,
     installed_version: Option<String>,
+    installed_at: Option<u64>,
+    archive_modified_at: Option<u64>,
     manifest: Option<RuntimeManifest>,
 }
 
@@ -330,8 +332,17 @@ fn runtime_pack_status() -> Result<RuntimePackStatus, String> {
     let archive_path = manifest
         .as_ref()
         .map(|item| runtime_archive_path(&data_dir, item));
-    let installed_version = read_runtime_install_manifest(&runtime_dir)
+    let install_manifest = read_runtime_install_manifest(&runtime_dir);
+    let installed_version = install_manifest
+        .as_ref()
         .and_then(|value| value.get("version")?.as_str().map(|text| text.to_string()));
+    let installed_at = install_manifest
+        .as_ref()
+        .and_then(|value| value.get("installedAt"))
+        .and_then(|v| v.as_u64().or_else(|| v.as_i64().and_then(|i| u64::try_from(i).ok())));
+    let archive_modified_at = archive_path
+        .as_ref()
+        .and_then(|path| file_mtime_unix(path));
 
     Ok(RuntimePackStatus {
         manifest_ready: manifest.is_some(),
@@ -343,8 +354,16 @@ fn runtime_pack_status() -> Result<RuntimePackStatus, String> {
         archive_ready: archive_path.as_ref().is_some_and(|path| path.is_file()),
         archive_path: archive_path.map(|path| path.display().to_string()),
         installed_version,
+        installed_at,
+        archive_modified_at,
         manifest,
     })
+}
+
+fn file_mtime_unix(path: &Path) -> Option<u64> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    modified.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())
 }
 
 /// Downloads the Python runtime pack archive, emitting progress events to the frontend.
@@ -445,7 +464,28 @@ fn extract_runtime_pack() -> Result<RuntimePackStatus, String> {
     let python = resolve_python_executable(&runtime.join("python"))
         .unwrap_or_else(|| runtime.join("python").join("bin").join("python"));
     patch_pyvenv_cfg(&python);
+    clear_runtime_cache_dir(&data_dir);
     runtime_pack_status()
+}
+
+fn clear_runtime_cache_dir(data_dir: &Path) {
+    let cache_dir = data_dir.join("cache");
+    if !cache_dir.exists() {
+        return;
+    }
+    if let Err(e) = fs::remove_dir_all(&cache_dir) {
+        append_to_setup_log(
+            data_dir,
+            &format!("cache cleanup warning: {}: {e}", cache_dir.display()),
+        );
+        return;
+    }
+    if let Err(e) = fs::create_dir_all(&cache_dir) {
+        append_to_setup_log(
+            data_dir,
+            &format!("cache recreate warning: {}: {e}", cache_dir.display()),
+        );
+    }
 }
 
 /// Creates required data directories and runs any pending data migrations.

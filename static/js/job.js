@@ -126,6 +126,9 @@ export function reset() {
 }
 
 function applyState(state) {
+  const terminal = TERMINAL_STATUSES.has(state.status);
+  jobBox.classList.toggle("hidden", terminal);
+
   if (state.job_id) {
     addTrackToLibrary({
       id: state.job_id,
@@ -279,7 +282,6 @@ function applyState(state) {
   progressEl.value = Math.round((state.progress || 0) * 100);
 
   // Cancel button is visible exactly while the job is in a non-terminal state.
-  const terminal = TERMINAL_STATUSES.has(state.status);
   jobCancelBtn.classList.toggle("hidden", terminal);
 
   if (state.status !== lastStatus) {
@@ -524,10 +526,9 @@ export function wireJobForm() {
     });
     setCurrentTrack(jobId);
 
-    // Both paths: keep job box hidden, overlay drives the UI.
-    // Start phrase rotation now that the job exists on the server.
-    jobBox.classList.add("hidden");
-    jobCancelBtn.classList.add("hidden");
+    // Show progress UI immediately once job is accepted.
+    jobBox.classList.remove("hidden");
+    jobCancelBtn.classList.remove("hidden");
     startPhraseRotation("queued");
     lastStatus = "queued";
 

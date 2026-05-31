@@ -1,6 +1,6 @@
 // catalog.js — library panel: folders, tracks, collapse, drag-and-drop
 import { STEM_NAMES } from "./constants.js";
-import { wireUpAudio, updateFooterTrack } from "./player.js";
+import { setWaveformLoading, wireUpAudio, updateFooterTrack } from "./player.js";
 import { initSections } from "./sections.js";
 import { bpmChip, keyChip, saveSelectedStems, selectedStems, titleEl } from "./state.js";
 import { showError } from "./job.js";
@@ -528,10 +528,16 @@ function applyStoredStemSelection(track) {
 }
 
 async function loadTrackIntoStudio(trackId) {
+  let handedOffToPlayer = false;
+  setWaveformLoading(true, "Loading project…");
   let track = tracks[trackId];
-  if (!track) return;
+  if (!track) {
+    setWaveformLoading(false);
+    return;
+  }
   if (track.status === "unavailable") {
     showError("This track's audio is no longer available. Re-upload to restore it.");
+    setWaveformLoading(false);
     return;
   }
   const hadStoredAudio = Boolean(track.audioStems?.length);
@@ -546,6 +552,7 @@ async function loadTrackIntoStudio(trackId) {
 
   // Always fetch fresh state so server-side changes (sections, analysis, stems)
   // are reflected — cached localStorage data can be stale.
+  setWaveformLoading(true, "Syncing project state…");
   try {
     const res = await fetch(`/api/jobs/${trackId}`);
     if (token !== _loadTrackToken) return;
@@ -560,13 +567,20 @@ async function loadTrackIntoStudio(trackId) {
       saveState();
       updateTrackStatus(trackId, "unavailable");
       showError("This track's audio is no longer available. Re-upload to restore it.");
+      setWaveformLoading(false);
       return;
     }
   } catch (e) { console.warn("[catalog] server sync failed, using stored track:", e); }
 
   if (token !== _loadTrackToken) return;
-  if (!track.audioStems?.length) return;
-  if (track.status !== "done" && !hadStoredAudio) return;
+  if (!track.audioStems?.length) {
+    setWaveformLoading(false);
+    return;
+  }
+  if (track.status !== "done" && !hadStoredAudio) {
+    setWaveformLoading(false);
+    return;
+  }
   applyStoredStemSelection(track);
   setCurrentTrack(trackId);
 
@@ -578,8 +592,11 @@ async function loadTrackIntoStudio(trackId) {
   }
 
   applyTrackInfoToPanel(track);
+  setWaveformLoading(true, "Loading stems…");
   wireUpAudio(trackId, track.audioStems, track.duration || 0, track.thumb, track.mixUrl ?? null, track.title || "", peaksPromise);
+  handedOffToPlayer = true;
   initSections(trackId, track.sections, track.duration || 0);
+  if (!handedOffToPlayer) setWaveformLoading(false);
 }
 
 async function runTrackReanalyze(trackId) {
